@@ -194,7 +194,7 @@ var CSSLint = (() => {
         rules[id].init(parser, reporter));
 
       try {
-        parser.parse(text);
+        parser.parse(text, {reuseCache: true});
       } catch (ex) {
         reporter.error('Fatal error, cannot continue: ' + ex.message, ex.line, ex.col, {});
       }

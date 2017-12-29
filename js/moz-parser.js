@@ -9,19 +9,22 @@ function parseMozFormat(mozStyle) {
     'regexp':     'regexps',
   };
   const parser = new parserlib.css.Parser();
-  const lines = mozStyle.split('\n');
-  const sectionStack = [{code: '', start: {line: 1, col: 1}}];
+  const sectionStack = [{code: '', start: 0}];
   const errors = [];
   const sections = [];
 
   parser.addListener('startdocument', e => {
     const lastSection = sectionStack[sectionStack.length - 1];
-    let outerText = getRange(lastSection.start, {line: e.line, col: e.col - 1});
+    let outerText = mozStyle.slice(lastSection.start, e.offset);
     const lastCmt = getLastComment(outerText);
-    const {endLine: line, endCol: col} = parser._tokenStream._token;
-    const section = {code: '', start: {line, col}};
+    const section = {
+      code: '',
+      start: parser._tokenStream._token.offset + 1,
+    };
     // move last comment before @-moz-document inside the section
-    if (!/\/\*[\s\n]*AGENT_SHEET[\s\n]*\*\//.test(lastCmt)) {
+    if (!lastCmt.includes('AGENT_SHEET') &&
+        !lastCmt.includes('==') &&
+        !/==userstyle==/iu.test(lastCmt)) {
       if (lastCmt) {
         section.code = lastCmt + '\n';
         outerText = outerText.slice(0, -lastCmt.length);
@@ -33,15 +36,9 @@ function parseMozFormat(mozStyle) {
       doAddSection(lastSection);
       lastSection.code = '';
     }
-    for (const f of e.functions) {
-      const m = f && f.match(/^([\w-]*)\((.+?)\)$/);
-      if (!m || !/^(url|url-prefix|domain|regexp)$/.test(m[1])) {
-        errors.push(`${e.line}:${e.col + 1} invalid function "${m ? m[1] : f || ''}"`);
-        continue;
-      }
-      const aType = CssToProperty[m[1]];
-      const aValue = unquote(aType !== 'regexps' ? m[2] : m[2].replace(/\\\\/g, '\\'));
-      (section[aType] = section[aType] || []).push(aValue);
+    for (const {name, expr, uri} of e.functions) {
+      const aType = CssToProperty[name.toLowerCase()];
+      (section[aType] = section[aType] || []).push(uri || expr.parts[0].value);
     }
     sectionStack.push(section);
   });
@@ -49,43 +46,24 @@ function parseMozFormat(mozStyle) {
   parser.addListener('enddocument', e => {
     const section = sectionStack.pop();
     const lastSection = sectionStack[sectionStack.length - 1];
-    const end = {line: e.line, col: e.col - 1};
-    section.code += getRange(section.start, end);
-    end.col += 2;
-    lastSection.start = end;
+    section.code += mozStyle.slice(section.start, e.offset);
+    lastSection.start = e.offset + 1;
     doAddSection(section);
   });
 
   parser.addListener('endstylesheet', () => {
     // add nonclosed outer sections (either broken or the last global one)
-    const lastLine = lines[lines.length - 1];
-    const endOfText = {line: lines.length, col: lastLine.length + 1};
     const lastSection = sectionStack[sectionStack.length - 1];
-    lastSection.code += getRange(lastSection.start, endOfText);
+    lastSection.code += mozStyle.slice(lastSection.start);
     sectionStack.forEach(doAddSection);
   });
 
   parser.addListener('error', e => {
-    errors.push(e.line + ':' + e.col + ' ' +
-      e.message.replace(/ at line \d.+$/, ''));
+    errors.push(`${e.line}:${e.col} ${e.message.replace(/ at line \d.+$/, '')}`);
   });
 
   parser.parse(mozStyle);
   return {sections, errors};
-
-  function getRange(start, end) {
-    const L1 = start.line - 1;
-    const C1 = start.col - 1;
-    const L2 = end.line - 1;
-    const C2 = end.col - 1;
-    if (L1 === L2) {
-      return lines[L1].substr(C1, C2 - C1 + 1);
-    } else {
-      const middle = lines.slice(L1 + 1, L2).join('\n');
-      return lines[L1].substr(C1) + '\n' + middle +
-        (L2 >= lines.length ? '' : ((middle ? '\n' : '') + lines[L2].substring(0, C2)));
-    }
-  }
 
   function doAddSection(section) {
     section.code = section.code.trim();
@@ -106,11 +84,6 @@ function parseMozFormat(mozStyle) {
     sections.push(Object.assign({}, section));
   }
 
-  function unquote(s) {
-    const first = s.charAt(0);
-    return (first === '"' || first === "'") && s.endsWith(first) ? s.slice(1, -1) : s;
-  }
-
   function getLastComment(text) {
     let open = text.length;
     let close;
@@ -126,11 +99,11 @@ function parseMozFormat(mozStyle) {
         break;
       }
       // find a closed preceding comment
-      const prevClose = text.lastIndexOf('*/', close);
+      const prevClose = text.lastIndexOf('*/', close - 2);
       // then find the real start of current comment
       // e.g. /* preceding */  /* current /* current /* current */
       open = text.indexOf('/*', prevClose < 0 ? 0 : prevClose + 2);
     }
-    return text.substr(open);
+    return open ? text.slice(open) : text;
   }
 }

@@ -701,6 +701,7 @@ self.parserlib = (() => {
         part.type === 'function' &&
         /^(?:-(?:ms|moz|o|webkit)-)?(?:repeating-)?(?:radial-|linear-)?gradient/i.test(part),
 
+      //eslint-disable-next-line no-use-before-define
       '<hex-color>': part => part.tokenType === Tokens.HASH,
 
       '<icccolor>': 'cielab() | cielch() | cielchab() | icc-color() | icc-named-color()',
@@ -752,6 +753,7 @@ self.parserlib = (() => {
         return this['<number>'](part) && (part.type === 'function' || part.value > 0);
       },
 
+      //eslint-disable-next-line no-use-before-define
       '<named-color>': part => lower(part.text) in Colors,
 
       '<number>': function (part) {
@@ -808,7 +810,8 @@ self.parserlib = (() => {
 
       '<uri>': part => part.type === 'uri',
 
-      '<var>': ({type, tokenType, name, expr, text}) =>
+      '<var>': ({type, tokenType, name, expr}) =>
+        //eslint-disable-next-line no-use-before-define
         tokenType === Tokens.USO_VAR ||
         type === 'function' &&
         expr.parts.length &&
@@ -1407,7 +1410,7 @@ self.parserlib = (() => {
   }
 
   //endregion
-  //region LowerCase helper
+  //region lowerCase helper
 
   const lowercaseCache = new Map();
 
@@ -1436,15 +1439,17 @@ self.parserlib = (() => {
     firstRun: true,
 
     start(parser) {
+      this.parser = parser;
+      if (!parser) return;
+      this.stream = parser._tokenStream;
       this.firstRun = !this.stream;
       this.generation = performance.now();
-      this.parser = parser;
-      this.stream = parser._tokenStream;
       this.trim();
     },
 
     addEvent(e) {
-      let i = this.stack.length
+      if (!this.parser) return;
+      let i = this.stack.length;
       while (--i >= 0) {
         const {offset, endOffset, events} = this.stack[i];
         if (e.offset >= offset && (!endOffset || e.offset <= endOffset)) {
@@ -1461,6 +1466,7 @@ self.parserlib = (() => {
     },
 
     startBlock(token = this.token()) {
+      if (!this.parser) return;
       this.stack.push({
         text: '',
         events: [],
@@ -1475,6 +1481,7 @@ self.parserlib = (() => {
     },
 
     adjustStart(token = this.token()) {
+      if (!this.parser) return;
       const block = this.stack[this.stack.length - 1];
       block.startLine = token.startLine || token.line;
       block.startCol = token.startCol || token.col;
@@ -1482,6 +1489,7 @@ self.parserlib = (() => {
     },
 
     endBlock(end = this.token()) {
+      if (!this.parser) return;
       const block = this.stack.pop();
       block.endLine = end.startLine || end.line;
       block.endCol = (end.startCol || end.col) + end.value.length;
@@ -1497,7 +1505,7 @@ self.parserlib = (() => {
     },
 
     findBlock(token = this.token()) {
-      if (this.firstRun || !token) return;
+      if (!this.parser || this.firstRun || !token) return;
 
       const stream = this.stream;
       const reader = stream._reader;
@@ -1610,7 +1618,7 @@ self.parserlib = (() => {
     },
 
     token() {
-      return this.stream._lt[this.stream._ltIndex] || this.stream._token;
+      return this.parser ? this.stream._lt[this.stream._ltIndex] || this.stream._token : null;
     }
   };
 
@@ -1730,123 +1738,7 @@ self.parserlib = (() => {
   //endregion
   //region PropertyValuePart
 
-  const tokenConverter = new Map([
-
-    ...(fn => [
-      Tokens.LENGTH,
-      Tokens.ANGLE,
-      Tokens.TIME,
-      Tokens.FREQ,
-      Tokens.DIMENSION,
-      Tokens.PERCENTAGE,
-      Tokens.NUMBER,
-    ].map(tt => [tt, fn]))((self, {number, units, unitsType}) => {
-      self.value = number;
-      self.units = units;
-      self.type = unitsType === 'number' && !self.text.includes('.') ? 'integer' : unitsType;
-    }),
-
-    [Tokens.HASH, self => {
-
-      self.type = 'color';
-      const text = self.text;
-      if (text.length <= 5) {
-        let n = parseInt(text.slice(1), 16);
-        if (text.length === 5) {
-          self.alpha = (n & 15) << 4 + (n & 15);
-          n >>= 4;
-        }
-        self.red = (n >> 8 & 15) << 4 + (n >> 8 & 15);
-        self.green = (n >> 4 & 15) << 4 + (n >> 4 & 15);
-        self.blue = (n & 15) << 4 + (n & 15);
-      } else {
-        let n = parseInt(text.substr(1, 6), 16);
-        self.red = n >> 16;
-        self.green = (n >> 8) & 255;
-        self.blue = n & 255;
-        if (text.length === 9) {
-          self.alpha = parseInt(text.substr(7, 2), 16);
-        }
-      }
-
-    }],
-    [Tokens.FUNCTION, (self, {name, expr}) => {
-
-      self.name = name;
-      self.expr = expr;
-      const parts = expr.parts;
-      switch (lower(name)) {
-        case 'rgb':
-        case 'rgba': {
-          const [r, g, b, a] = parts.map(p => !/[,/]/.test(p)).map(parseFloat);
-          const pct = parts[0].tokenType === Tokens.PERCENTAGE ? 2.55 : 1;
-          self.type = 'color';
-          self.red = r * pct;
-          self.green = g * pct;
-          self.blue = b * pct;
-          if (!isNaN(a)) self.alpha = a * (/%/.test(parts[parts.length - 1]) ? 2.55/100 : 1);
-          return;
-        }
-        case 'hsl':
-        case 'hsla': {
-          const [h, s, l, a] = parts.map(p => !/[,/]/.test(p)).map(parseFloat);
-          self.type = 'color';
-          self.hue = h;
-          self.hueUnit = parts[0].units;
-          self.saturation = s;
-          self.lightness = l;
-          if (!isNaN(a)) self.alpha = a * (/%/.test(parts[parts.length - 1]) ? 2.55/100 : 1);
-          return;
-        }
-        default:
-          self.type = 'function';
-      }
-
-    }],
-    [Tokens.URI, self => {
-
-      // generated by TokenStream.readURI, so always double-quoted.
-      if (!/^url\(("([^\\"]|\\.)*")\)/i.test(self.text)) return false;
-      self.type = 'uri';
-      self.uri = PropertyValuePart.parseString(RegExp.$1);
-
-    }],
-    [Tokens.STRING, self => {
-
-      const text = self.text;
-      if (text[0] === '"' &&
-          /^"([^\n\r\f\\"]|\\\r\n|\\[^\r0-9a-f]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?)*"/i.test(text)) {
-        self.type = 'string';
-        self.value = PropertyValuePart.parseString(text);
-        return;
-      }
-      if (text[0] === "'" &&
-          /^'([^\n\r\f\\']|\\\r\n|\\[^\r0-9a-f]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?)*'/i.test(text)) {
-        self.type = 'string';
-        self.value = PropertyValuePart.parseString(text);
-      }
-
-    }],
-    [Tokens.IDENT, self => {
-
-      const text = self.text;
-      let namedColor;
-      if (!text.includes('-') && (namedColor = Colors[lower(text)])) {
-        self.value = namedColor;
-        tokenConverter.get(Tokens.HASH)(self);
-      } else {
-        self.type = 'identifier';
-        self.value = text;
-      }
-
-    }],
-    [Tokens.CUSTOM_PROP, self => {
-
-      self.type = 'custom-property';
-      self.value = self.text;
-
-    }],
-  ]);
+  const tokenConverter = new Map();
 
   class PropertyValuePart extends SyntaxUnit {
     /**
@@ -1896,6 +1788,122 @@ self.parserlib = (() => {
       return '"' + value.replace(/["\r\n\f]/g, replacer) + '"';
     }
   }
+
+  [
+    ...(fn => [
+      Tokens.LENGTH,
+      Tokens.ANGLE,
+      Tokens.TIME,
+      Tokens.FREQ,
+      Tokens.DIMENSION,
+      Tokens.PERCENTAGE,
+      Tokens.NUMBER,
+    ].map(tt => [tt, fn]))((self, {number, units, unitsType}) => {
+      self.value = number;
+      self.units = units;
+      self.type = unitsType === 'number' && !self.text.includes('.') ? 'integer' : unitsType;
+    }),
+
+    [Tokens.HASH, self => {
+
+      self.type = 'color';
+      const text = self.text;
+      if (text.length <= 5) {
+        let n = parseInt(text.slice(1), 16);
+        if (text.length === 5) {
+          self.alpha = (n & 15) << 4 + (n & 15);
+          n >>= 4;
+        }
+        self.red = (n >> 8 & 15) << 4 + (n >> 8 & 15);
+        self.green = (n >> 4 & 15) << 4 + (n >> 4 & 15);
+        self.blue = (n & 15) << 4 + (n & 15);
+      } else {
+        const n = parseInt(text.substr(1, 6), 16);
+        self.red = n >> 16;
+        self.green = (n >> 8) & 255;
+        self.blue = n & 255;
+        if (text.length === 9) {
+          self.alpha = parseInt(text.substr(7, 2), 16);
+        }
+      }
+
+    }],
+    [Tokens.FUNCTION, (self, {name, expr}) => {
+
+      self.name = name;
+      self.expr = expr;
+      const parts = expr.parts;
+      switch (lower(name)) {
+        case 'rgb':
+        case 'rgba': {
+          const [r, g, b, a] = parts.map(p => !/[,/]/.test(p)).map(parseFloat);
+          const pct = parts[0].tokenType === Tokens.PERCENTAGE ? 2.55 : 1;
+          self.type = 'color';
+          self.red = r * pct;
+          self.green = g * pct;
+          self.blue = b * pct;
+          if (!isNaN(a)) self.alpha = a * (/%/.test(parts[parts.length - 1]) ? 2.55 / 100 : 1);
+          return;
+        }
+        case 'hsl':
+        case 'hsla': {
+          const [h, s, l, a] = parts.map(p => !/[,/]/.test(p)).map(parseFloat);
+          self.type = 'color';
+          self.hue = h;
+          self.hueUnit = parts[0].units;
+          self.saturation = s;
+          self.lightness = l;
+          if (!isNaN(a)) self.alpha = a * (/%/.test(parts[parts.length - 1]) ? 2.55 / 100 : 1);
+          return;
+        }
+        default:
+          self.type = 'function';
+      }
+
+    }],
+    [Tokens.URI, (self, {name, uri}) => {
+
+      self.type = 'uri';
+      self.name = name;
+      self.uri = uri;
+
+    }],
+    [Tokens.STRING, self => {
+
+      const text = self.text;
+      if (text[0] === '"' &&
+          /^"([^\n\r\f\\"]|\\\r\n|\\[^\r0-9a-f]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?)*"/i.test(text)) {
+        self.type = 'string';
+        self.value = PropertyValuePart.parseString(text);
+        return;
+      }
+      if (text[0] === "'" &&
+          /^'([^\n\r\f\\']|\\\r\n|\\[^\r0-9a-f]|\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])?)*'/i.test(text)) {
+        self.type = 'string';
+        self.value = PropertyValuePart.parseString(text);
+      }
+
+    }],
+    [Tokens.IDENT, self => {
+
+      const text = self.text;
+      let namedColor;
+      if (!text.includes('-') && (namedColor = Colors[lower(text)])) {
+        self.value = namedColor;
+        tokenConverter.get(Tokens.HASH)(self);
+      } else {
+        self.type = 'identifier';
+        self.value = text;
+      }
+
+    }],
+    [Tokens.CUSTOM_PROP, self => {
+
+      self.type = 'custom-property';
+      self.value = self.text;
+
+    }],
+  ].forEach(([tt, fn]) => tokenConverter.set(tt, fn));
 
   //endregion
   //region SelectorPart
@@ -2291,7 +2299,7 @@ self.parserlib = (() => {
         expression.mark();
 
         const result = matchFunc(expression);
-        if (result) expression.drop(); 
+        if (result) expression.drop();
         else expression.restore();
 
         return result;
@@ -2593,7 +2601,7 @@ self.parserlib = (() => {
       marker = marker || '{' + min + (min === max ? '' : ',' + max) + '}';
 
       const matchNext = !optSep
-        ? (expression, i) => this.match(expression)
+        ? expression => this.match(expression)
         : (expression, i) => (!i ? this : optSep).match(expression);
 
       const matchFunc = expression => {
@@ -2757,7 +2765,10 @@ self.parserlib = (() => {
      * @return {void}
      */
     mustMatch(tokenTypes) {
-      if (!this.match(tokenTypes) && !this.match(Tokens.USO_VAR)) {
+      if (tokenTypes !== Tokens.USO_VAR && this.match(Tokens.USO_VAR)) {
+
+      }
+      if (!this.match(tokenTypes)) {
         const {startLine: line, startCol: col, offset} = this.LT(1);
         const info = Tokens[Array.isArray(tokenTypes) ? tokenTypes[0] : tokenTypes];
         throw new SyntaxError(`Expected ${info.text || info.name} at line ${line}, col ${col}.`, {line, col, offset});
@@ -2787,14 +2798,12 @@ self.parserlib = (() => {
       const cache = this._ltIndexCache;
       const lt = this._lt;
       let i = 0;
-      let info;
 
       // check the lookahead buffer first
       if (lt.length && this._ltIndex >= 0 && this._ltIndex < lt.length) {
 
         i++;
         this._token = lt[this._ltIndex++];
-        info = Tokens[this._token.type];
 
         if (this._ltIndex <= lt.length) {
           cache.push(i);
@@ -2900,15 +2909,6 @@ self.parserlib = (() => {
   class TokenStream extends TokenStreamBase {
     /**
      * A token stream that produces CSS tokens.
-     */
-    constructor(input) {
-      super(input);
-    }
-
-    /**
-     * Overrides the TokenStreamBase method of the same name
-     * to produce CSS tokens.
-     * @return {Object} A token object representing the next token.
      */
     _getToken() {
       const reader = this._reader;
@@ -3258,37 +3258,38 @@ self.parserlib = (() => {
      */
     identOrFunctionToken(first, pos) {
       const reader = this._reader;
-      const uriFns = ['url(', 'url-prefix(', 'domain('];
+      const uriFns = ['url', 'url-prefix', 'domain'];
 
-      let ident = this.readName(first);
+      const name = this.readName(first);
 
       switch (reader.peek()) {
 
         // might be a URI or function
         case '(':
-          ident += reader.read();
-
-          if (uriFns.includes(lower(ident))) {
+          reader.read();
+          if (uriFns.includes(lower(name))) {
             reader.mark();
-            const uri = this.readURI(ident);
-            if (uri !== null) {
-              return this.createToken(Tokens.URI, uri, pos);
+            const uri = this.readURI(name + '(');
+            if (uri) {
+              const token = this.createToken(Tokens.URI, uri.text, pos);
+              token.name = name;
+              token.uri = uri.value;
+              return token;
             }
             reader.reset();
           }
-          return this.createToken(Tokens.FUNCTION, ident, pos);
+          return this.createToken(Tokens.FUNCTION, name + '(', pos);
 
         // might be an IE function
         case ':':
           // IE-specific functions always being with progid:
-          if (lower(ident) === 'progid') {
-            ident += reader.readTo('(');
-            return this.createToken(Tokens.IE_FUNCTION, ident, pos);
+          if (lower(name) === 'progid') {
+            return this.createToken(Tokens.IE_FUNCTION, name + reader.readTo('('), pos);
           }
       }
 
-      const type = ident.startsWith('--') ? Tokens.CUSTOM_PROP : Tokens.IDENT;
-      return this.createToken(type, ident, pos);
+      const type = name.startsWith('--') ? Tokens.CUSTOM_PROP : Tokens.IDENT;
+      return this.createToken(type, name, pos);
     }
 
     /**
@@ -3310,7 +3311,7 @@ self.parserlib = (() => {
         }
         const comment = reader.readMatch('/*');
         if (!comment) break;
-        text += comment + this.readComment(c);
+        text += comment + this.readComment(comment);
       }
 
       reader.reset();
@@ -3343,7 +3344,7 @@ self.parserlib = (() => {
      */
     numberToken(first, pos) {
       const reader = this._reader;
-      let value = this.readNumber(first);
+      const value = this.readNumber(first);
       let tt = Tokens.NUMBER;
       let units, type;
 
@@ -3441,7 +3442,7 @@ self.parserlib = (() => {
       }
 
       reader.mark();
-      reader.read()
+      reader.read();
       let value = first + '+';
 
       let chunk = this.readUnicodeRangePart(true);
@@ -3517,17 +3518,17 @@ self.parserlib = (() => {
     readURI(first) {
       const reader = this._reader;
 
-      let uri = first;
-      let inner = '';
+      const uri = first;
+      let value = '';
 
       this.readWhitespace();
 
       if (/['"]/.test(reader.peek())) {
-        inner = this.readString();
-        if (inner == null) return null;
-        inner = PropertyValuePart.parseString(inner);
+        value = this.readString();
+        if (value === null) return null;
+        value = PropertyValuePart.parseString(value);
       } else {
-        inner = this.readUnquotedURL();
+        value = this.readUnquotedURL();
       }
 
       this.readWhitespace();
@@ -3535,7 +3536,7 @@ self.parserlib = (() => {
 
       // Ensure argument to URL is always double-quoted
       // (This simplifies later processing in PropertyValuePart.)
-      return uri + PropertyValuePart.serializeString(inner) + reader.read();
+      return {value, text: uri + PropertyValuePart.serializeString(value) + reader.read()};
     }
 
     // This method never fails, although it may return an empty string.
@@ -3594,7 +3595,7 @@ self.parserlib = (() => {
 
     readComment(first) {
       return first +
-             this._reader.readCount(first ? 1 : 2) +
+             this._reader.readCount(2 - first.length) +
              this._reader.readMatch(/([^*]|\*(?!\/))*(\*\/|$)/y);
     }
   }
@@ -3796,7 +3797,8 @@ self.parserlib = (() => {
         throwEndExpected(expression.peek());
       } else {
         const {text} = expression.value;
-        throw new ValidationError(`Expected '${ValidationTypes.describe(spec)}' but found '${text}'.`, expression.value);
+        throw new ValidationError(`Expected '${ValidationTypes.describe(spec)}' but found '${text}'.`,
+          expression.value);
       }
     }
 
@@ -3908,7 +3910,7 @@ self.parserlib = (() => {
               this._skipCruft();
               continue;
 
-            case Tokens.UNKNOWN_SYM:
+            case Tokens.UNKNOWN_SYM: {
               stream.get();
               const lt0 = stream.LT(0);
               if (this.options.strict) {
@@ -3926,15 +3928,15 @@ self.parserlib = (() => {
               do {
                 const brace = stream.advance([Tokens.LBRACE, Tokens.RBRACE]);
                 count += brace === Tokens.LBRACE ? 1 : -1;
-              } while (count > 0 && !stream._reader.eof())
+              } while (count > 0 && !stream._reader.eof());
               if (count < 0) stream.unget();
               continue;
-
+            }
             case Tokens.S:
               this._ws();
               continue;
 
-            default:
+            default: {
               if (this._ruleset()) continue;
 
               let token;
@@ -3959,6 +3961,7 @@ self.parserlib = (() => {
                   stream.get();
                   this._unexpectedToken(stream._token);
               }
+            }
           }
         } catch (ex) {
           if (ex instanceof SyntaxError && !this.options.strict) {
@@ -4419,7 +4422,6 @@ self.parserlib = (() => {
      *    ;
      */
     _margin() {
-      const stream = this._tokenStream;
       const margin = this._marginSym();
       if (!margin) return false;
 
@@ -4557,14 +4559,13 @@ self.parserlib = (() => {
       if (/^@-([^-]+)-/.test(start.value)) {
         prefix = RegExp.$1;
       }
-      this._ws();
 
-      functions.push(this._documentFunction());
-      while (stream.match(Tokens.COMMA)) {
+      do {
         this._ws();
         functions.push(this._documentFunction());
-      }
+      } while (stream.match(Tokens.COMMA));
 
+      this._ws();
       stream.mustMatch(Tokens.LBRACE);
 
       this.fire({
@@ -4605,13 +4606,10 @@ self.parserlib = (() => {
      *   ;
      */
     _documentFunction() {
-      if (this._tokenStream.match(Tokens.URI)) {
-        const value = this._tokenStream._token.value;
-        this._ws();
-        return value;
-      } else {
-        return (this._function() || {}).value || null;
-      }
+      const stream = this._tokenStream;
+      return stream.match(Tokens.URI) ?
+        new PropertyValuePart(stream._token) :
+        this._function();
     }
 
     /*
@@ -4709,6 +4707,8 @@ self.parserlib = (() => {
       try {
         if (parserCache.findOrStartBlock()) return true;
 
+        if (this._tokenStream.match(Tokens.USO_VAR)) this._ws();
+
         const selectors = this._selectorsGroup();
         if (selectors) {
 
@@ -4740,7 +4740,7 @@ self.parserlib = (() => {
 
         // if there's a right brace, the rule is finished so don't do anything
         // otherwise, rethrow the error because it wasn't handled properly
-        if (stream.advance([Tokens.RBRACE]) !== Tokens.RBRACE) throw ex;
+        if (this._tokenStream.advance([Tokens.RBRACE]) !== Tokens.RBRACE) throw ex;
 
         // If even a single selector fails to parse, the entire ruleset should be thrown away,
         // so we let the parser continue with the next one
@@ -4755,8 +4755,7 @@ self.parserlib = (() => {
      */
     _selectorsGroup() {
       const selectors = [];
-      let selector;
-      let comma;
+      let selector, comma;
 
       while ((selector = this._selector())) {
         selectors.push(selector);
@@ -5346,7 +5345,7 @@ self.parserlib = (() => {
       if (!value[0]) return null;
       const token = this._tokenStream._token;
       token.value = value.join('');
-      token.type === Tokens.CUSTOM_PROP;
+      token.type = Tokens.CUSTOM_PROP;
       return new PropertyValue([new PropertyValuePart(token)], token);
     }
 
@@ -5365,6 +5364,7 @@ self.parserlib = (() => {
 
       const finalize = (token, value) => {
         if (!token) return null;
+        if (token instanceof SyntaxUnit) return token;
         if (unary) {
           token.startLine = unary.startLine;
           token.startCol = unary.startCol;
@@ -5407,7 +5407,7 @@ self.parserlib = (() => {
         return finalize(stream._token);
       }
 
-      return finalize(this._hexcolor() || this._function()/* || this._usoVar()*/);
+      return finalize(this._hexcolor() || this._function({asText: unary}));
     }
 
     /*
@@ -5415,35 +5415,28 @@ self.parserlib = (() => {
      *   : FUNCTION S* expr ')' S*
      *   ;
      */
-    _function() {
+    _function({asText} = {}) {
       const stream = this._tokenStream;
-
       if (!stream.match(Tokens.FUNCTION)) return null;
       this._ws();
 
-      let value = stream._token.value;
-      const name = value.slice(0, -1);
-
+      const start = stream._token;
+      const name = start.value.slice(0, -1);
       const expr = this._expr(lower(name));
-      value += expr;
-
-      // Horrible hack in case it's an IE filter
-      if (this.options.ieFilters && stream.peek() === Tokens.EQUALS) {
-        value += this._functionIeFilter();
-      }
+      const ieFilter = this.options.ieFilters && stream.peek() === Tokens.EQUALS ?
+        this._functionIeFilter() : '';
+      const text = name + '(' + expr + ieFilter + ')';
 
       stream.mustMatch(Tokens.RPAREN);
       this._ws();
-      value += ')';
 
-      return {
-        expr,
-        name,
-        value,
-        startLine: stream._token.startLine,
-        startCol: stream._token.startCol,
-        type: Tokens.FUNCTION,
-      };
+      if (asText) return text;
+
+      const unit = new SyntaxUnit(text, start, 'function');
+      unit.expr = expr;
+      unit.name = name;
+      unit.tokenType = Tokens.FUNCTION;
+      return unit;
     }
 
     _functionIeFilter() {
@@ -5809,9 +5802,9 @@ self.parserlib = (() => {
     // Parsing methods
     //-----------------------------------------------------------------
 
-    parse(input) {
+    parse(input, {reuseCache} = {}) {
       this._tokenStream = new TokenStream(input);
-      parserCache.start(this);
+      parserCache.start(reuseCache && this);
       this._stylesheet();
     }
 
@@ -5820,9 +5813,9 @@ self.parserlib = (() => {
       return this.parse(input);
     }
 
-    parseMediaQuery(input) {
+    parseMediaQuery(input, {reuseCache} = {}) {
       this._tokenStream = new TokenStream(input);
-      parserCache.start(this);
+      parserCache.start(reuseCache && this);
       const result = this._mediaQuery();
       this._verifyEnd();
       return result;
@@ -5848,9 +5841,9 @@ self.parserlib = (() => {
      * @param {String} input The text to parser.
      * @return {Boolean} True if the parse completed successfully, false if not.
      */
-    parseRule(input) {
+    parseRule(input, {reuseCache} = {}) {
       this._tokenStream = new TokenStream(input);
-      parserCache.start(this);
+      parserCache.start(reuseCache && this);
       this._ws();
       const result = this._ruleset();
       this._ws();
