@@ -48,7 +48,7 @@ var linterConfig = {
       },
       onUpdateLinting(annotationsNotSorted, annotations, cm) {
         cm.endOperation();
-        updateLintReport(cm, 0);
+        updateLintReport(cm);
       },
     } : false;
   },
