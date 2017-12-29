@@ -563,15 +563,17 @@ function setupLinterPopup(config) {
 
 function loadLinterAssets(name = linterConfig.getName()) {
   const worker = linterConfig.worker[name];
-  return !name || !worker || worker.instance ? Promise.resolve() :
-    loadScript((worker.instance ? [] : [
-      (worker.instance = new Worker(worker.path)),
-      `/edit/lint-defaults-${name}.js`,
-    ]).concat(CodeMirror.lint ? [] : [
+  if (!name || !worker) return Promise.resolve();
+  const scripts = [];
+  if (!worker.instance) {
+    worker.instance = new Worker(worker.path);
+    scripts.push(`/edit/lint-defaults-${name}.js`);
+  }
+  if (!CodeMirror.lint) {
+    scripts.push(
       '/vendor/codemirror/addon/lint/lint.css',
-      '/msgbox/msgbox.css',
       '/vendor/codemirror/addon/lint/lint.js',
-      '/edit/lint-codemirror-helper.js',
-      '/msgbox/msgbox.js'
-    ]));
+      '/edit/lint-codemirror-helper.js');
+  }
+  return scripts.length ? loadScript(scripts) : Promise.resolve();
 }

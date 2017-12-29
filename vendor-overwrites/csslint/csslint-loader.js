@@ -1,4 +1,4 @@
-/* global parserlib CSSLint mozParser */
+/* global parserlib CSSLint parseMozFormat */
 'use strict';
 
 self.importScripts('./parserlib.js');
@@ -6,9 +6,12 @@ parserlib.css.Tokens[parserlib.css.Tokens.COMMENT].hide = false;
 
 self.onmessage = ({data: {action = 'run', code, config}}) => {
 
-  if (!self.CSSLint && action !== 'parse') {
-    self.importScripts('./csslint.js');
+  if (action === 'parse') {
+    if (!self.parseMozFormat) self.importScripts('/js/moz-parser.js');
+    self.postMessage(parseMozFormat(code));
+    return;
   }
+  if (!self.CSSLint) self.importScripts('./csslint.js');
 
   switch (action) {
     case 'getAllRuleIds':
@@ -28,10 +31,5 @@ self.onmessage = ({data: {action = 'run', code, config}}) => {
       self.postMessage(results);
       return;
     }
-    case 'parse':
-      if (!self.mozParser) self.importScripts('/js/moz-parser.js');
-      mozParser.parse(code)
-        .then(sections => self.postMessage(sections))
-        .catch(info => self.postMessage({__ERROR__: info}));
   }
 };

@@ -1,4 +1,4 @@
-/* global loadScript mozParser semverCompare colorParser styleCodeEmpty */
+/* global loadScript semverCompare colorParser styleCodeEmpty */
 'use strict';
 
 // eslint-disable-next-line no-var
@@ -491,11 +491,17 @@ var usercss = (() => {
 
     const sVars = simpleVars(vars);
 
-    return Promise.resolve(builder.preprocess && builder.preprocess(sourceCode, sVars) || sourceCode)
+    return (
+      Promise.resolve(
+        builder.preprocess && builder.preprocess(sourceCode, sVars) ||
+        sourceCode)
       .then(mozStyle => invokeWorker({action: 'parse', code: mozStyle}))
-      .then(sections => (style.sections = sections))
-      .then(() => builder.postprocess && builder.postprocess(style.sections, sVars))
-      .then(() => style);
+      .then(({sections, errors}) => sections.length && sections || Promise.reject(errors))
+      .then(sections => {
+        style.sections = sections;
+        if (builder.postprocess) builder.postprocess(style.sections, sVars);
+        return style;
+      }));
   }
 
   function simpleVars(vars) {
