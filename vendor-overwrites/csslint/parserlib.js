@@ -1434,10 +1434,10 @@ self.parserlib = (() => {
     firstRun: true,
 
     start(parser) {
+      this.firstRun = !this.parser;
       this.parser = parser;
       if (!parser) return;
       this.stream = parser._tokenStream;
-      this.firstRun = !this.stream;
       this.generation = performance.now();
       this.numEvents = 0;
       this.trim();
@@ -1452,7 +1452,7 @@ self.parserlib = (() => {
           return;
         }
       }
-      this.events.push(e);
+      //this.events.push(e);
     },
 
     feedback({messages}) {
@@ -1650,13 +1650,13 @@ self.parserlib = (() => {
   class EventTarget {
 
     constructor() {
-      this._listeners = {};
+      this._listeners = new Map();
     }
 
-    addListener(type, listener) {
-      let listeners = this._listeners[type];
-      if (!listeners) listeners = this._listeners[type] = [];
-      listeners.push(listener);
+    addListener(type, fn) {
+      let listeners = this._listeners.get(type);
+      if (!listeners) this._listeners.set(type, (listeners = new Set()));
+      listeners.add(fn);
     }
 
     fire(event) {
@@ -1671,27 +1671,16 @@ self.parserlib = (() => {
         throw new Error("Event object missing 'type' property.");
       }
 
-      let listeners = this._listeners[event.type];
-      if (listeners) {
-        // create a copy of the array and use that so listeners can't chane
-        listeners = listeners.slice();
-        for (let i = 0, len = listeners.length; i < len; i++) {
-          listeners[i].call(this, event);
-        }
+      const listeners = this._listeners.get(event.type);
+      if (!listeners) return;
+      for (const fn of listeners.values()) {
+        fn.call(this, event);
       }
     }
 
-    removeListener(type, listener) {
-      if (this._listeners[type]) {
-        const listeners = this._listeners[type];
-        for (let i = 0, len = listeners.length; i < len; i++) {
-          if (listeners[i] === listener) {
-            listeners.splice(i, 1);
-            break;
-          }
-        }
-
-      }
+    removeListener(type, fn) {
+      const listeners = this._listeners.get(type);
+      if (listeners) listeners.delete(fn);
     }
   }
 
@@ -4120,9 +4109,7 @@ self.parserlib = (() => {
       this._ws();
 
       if (emit !== false) {
-        this.fire({
-          type: 'startsupports',
-        }, start);
+        this.fire('startsupports', start);
       }
 
       while (this._ruleset()) { /*NOP*/ }
@@ -4137,9 +4124,7 @@ self.parserlib = (() => {
       stream.mustMatch(Tokens.RBRACE);
 
       if (emit !== false) {
-        this.fire({
-          type: 'endsupports',
-        });
+        this.fire('endsupports');
       }
 
       this._ws();
@@ -4541,16 +4526,12 @@ self.parserlib = (() => {
       const stream = this._tokenStream;
       stream.mustMatch(Tokens.FONT_FACE_SYM);
 
-      this.fire({
-        type: 'startfontface',
-      });
+      this.fire('startfontface');
 
       this._ws();
       this._readDeclarations();
 
-      this.fire({
-        type: 'endfontface',
-      });
+      this.fire('endfontface');
     }
 
     /*
@@ -4563,16 +4544,12 @@ self.parserlib = (() => {
       const stream = this._tokenStream;
       stream.mustMatch(Tokens.VIEWPORT_SYM);
 
-      this.fire({
-        type: 'startviewport',
-      });
+      this.fire('startviewport');
 
       this._ws();
       this._readDeclarations();
 
-      this.fire({
-        type: 'endviewport',
-      });
+      this.fire('endviewport');
     }
 
     /*
@@ -4743,38 +4720,35 @@ self.parserlib = (() => {
         this._tokenStream._skipUsoVar();
 
         const selectors = this._selectorsGroup();
-        if (selectors) {
-
-          parserCache.adjustStart(selectors[0]);
-          this.fire({
-            type: 'startrule',
-            selectors,
-          }, selectors[0]);
-
-          this._readDeclarations({stopOnBrace: true});
-
-          this.fire({
-            type: 'endrule',
-            selectors,
-          });
-          parserCache.endBlock();
-
-          this._ws();
+        if (!selectors) {
+          parserCache.stack.pop();
+          return selectors;
         }
+
+        parserCache.adjustStart(selectors[0]);
+        this.fire({
+          type: 'startrule',
+          selectors,
+        }, selectors[0]);
+
+        this._readDeclarations({stopOnBrace: true});
+
+        this.fire({
+          type: 'endrule',
+          selectors,
+        });
+        parserCache.endBlock();
+
+        this._ws();
         return selectors;
 
       } catch (ex) {
-
-        if (!(ex instanceof SyntaxError) || this.options.strict) {
-          throw ex;
-        }
-
+        parserCache.stack.pop();
+        if (!(ex instanceof SyntaxError) || this.options.strict) throw ex;
         this.fire(Object.assign({}, ex, {type: 'error', error: ex}));
-
         // if there's a right brace, the rule is finished so don't do anything
         // otherwise, rethrow the error because it wasn't handled properly
         if (this._tokenStream.advance([Tokens.RBRACE]) !== Tokens.RBRACE) throw ex;
-
         // If even a single selector fails to parse, the entire ruleset should be thrown away,
         // so we let the parser continue with the next one
         return true;
@@ -5778,16 +5752,13 @@ self.parserlib = (() => {
         this.fire(Object.assign({}, ex, {type: 'error', error: ex}));
 
         switch (stream.advance([Tokens.SEMICOLON, Tokens.RBRACE])) {
-
           case Tokens.SEMICOLON:
             // see if there's another declaration
             this._readDeclarations({checkStart: false, readMargins, stopOnBrace});
             return;
-
           case Tokens.RBRACE:
             // the rule is finished
             return;
-
           default:
             // rethrow the error because it wasn't handled properly
             throw ex;
