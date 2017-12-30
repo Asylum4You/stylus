@@ -286,6 +286,7 @@ var CSSLint = (() => {
 CSSLint._Reporter = Reporter;
 
 CSSLint.Util = {
+
   indexOf(values, value) {
     if (typeof values.indexOf === 'function') {
       return values.indexOf(value);
@@ -353,7 +354,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     const sizeProps = {
       width:  [
         'border',
@@ -376,39 +376,18 @@ CSSLint.addRule({
     let boxSizing = false;
     let started = 0;
 
-    CSSLint.util.registerBlockEvents(parser, startRule, endRule, property);
-
-    function startRule() {
+    const startRule = () => {
       started = 1;
       properties = {};
       boxSizing = false;
-    }
+    };
 
-    function endRule() {
-      started = 0;
-      if (boxSizing) return;
-
-      for (const size in sizeProps) {
-        if (!properties[size]) continue;
-
-        for (const prop in sizeProps[size]) {
-          if (prop !== 'padding' || !properties[prop]) continue;
-          const {value, line, col} = properties[prop].value;
-
-          if (value.parts.length !== 2 || Number(value.parts[0].value) !== 0) {
-            reporter.report(`Using ${size} with ${prop} can sometimes make elements larger than you expect.`,
-              line, col, rule);
-          }
-        }
-      }
-      startRule();
-    }
-
-    function property(event) {
+    const property = event => {
       if (!started) return;
       const name = event.property.text.toLowerCase();
 
-      if (sizeProps.width[name] || sizeProps.height[name]) {
+      if (sizeProps.width.includes(name) || sizeProps.height.includes(name)) {
+
         if (!/^0+\D*$/.test(event.value) &&
             (name !== 'border' || !/^none$/i.test(event.value))) {
           properties[name] = {
@@ -417,13 +396,36 @@ CSSLint.addRule({
             value: event.value,
           };
         }
+
       } else if (/^(width|height)/i.test(name) &&
                  /^(length|percentage)/.test(event.value.parts[0].type)) {
         properties[name] = 1;
+
       } else if (name === 'box-sizing') {
         boxSizing = true;
       }
-    }
+    };
+
+    const endRule = () => {
+      started = 0;
+      if (boxSizing) return;
+
+      for (const size in sizeProps) {
+        if (!properties[size]) continue;
+
+        for (const prop of sizeProps[size]) {
+          if (prop !== 'padding' || !properties[prop]) continue;
+
+          const {value: {parts}, line, col} = properties[prop].value;
+          if (parts.length !== 2 || Number(parts[0].value) !== 0) {
+            reporter.report(`Using ${size} with ${prop} can sometimes make elements larger than you expect.`,
+              line, col, this);
+          }
+        }
+      }
+    };
+
+    CSSLint.util.registerBlockEvents(parser, startRule, endRule, property);
   },
 });
 
@@ -564,7 +566,6 @@ CSSLint.addRule({
       'word-break':                 'epub ms',
       'writing-mode':               'epub ms',
     };
-    const rule = this;
     const applyTo = [];
     let properties = [];
     let inKeyFrame = false;
@@ -649,7 +650,7 @@ CSSLint.addRule({
           const {line, col} = value.actualNodes[0];
           reporter.report(
             `The property ${item} is compatible with ${propertiesSpecified} and should be included as well.`,
-            line, col, rule);
+            line, col, this);
         }
       }
     });
@@ -664,7 +665,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     const propertiesToCheck = {
       'display':        1,
       'float':          'none',
@@ -685,14 +685,12 @@ CSSLint.addRule({
     let properties;
     let started = 0;
 
-    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, property);
-
-    function startRule() {
+    const startRule = () => {
       started = 1;
       properties = {};
-    }
+    };
 
-    function property(event) {
+    const property = event => {
       if (!started) return;
       const name = event.property.text.toLowerCase();
       if (name in propertiesToCheck) {
@@ -702,9 +700,9 @@ CSSLint.addRule({
           col:   event.property.col,
         };
       }
-    }
+    };
 
-    function reportProperty(name, display, msg) {
+    const reportProperty = (name, display, msg) => {
       const prop = properties[name];
       if (!prop) return;
 
@@ -713,10 +711,10 @@ CSSLint.addRule({
 
       const {line, col} = prop;
       reporter.report(msg || `${name} can't be used with display: ${display}.`,
-        line, col, rule);
-    }
+        line, col, this);
+    };
 
-    function endRule() {
+    const endRule = () => {
       started = 0;
       const display = properties.display && properties.display.value;
       if (!display) return;
@@ -750,7 +748,9 @@ CSSLint.addRule({
           ['margin', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom', 'float']
             .forEach(p => reportProperty(p, display));
       }
-    }
+    };
+
+    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, property);
   },
 });
 
@@ -762,7 +762,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     const stack = {};
 
     parser.addListener('property', event => {
@@ -781,7 +780,7 @@ CSSLint.addRule({
         reporter.report(
           `Background image '${part.uri}' was used multiple times, ` +
           `first declared at line ${uri.line}, col ${uri.col}.`,
-          event.line, event.col, rule);
+          event.line, event.col, this);
       }
     });
   },
@@ -795,33 +794,32 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     let properties, lastName;
     let started = 0;
 
-    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, property);
-
-    function startRule() {
+    const startRule = () => {
       started = 1;
       properties = {};
-    }
+    };
 
-    function endRule() {
+    const endRule = () => {
       started = 0;
       properties = {};
-    }
+    };
 
-    function property(event) {
+    const property = event => {
       if (!started) return;
       const property = event.property;
       const name = property.text.toLowerCase();
       const last = properties[name];
       if (last && (lastName !== name || last === event.value.text)) {
-        reporter.report(`Duplicate property '${property}' found.`, event.line, event.col, rule);
+        reporter.report(`Duplicate property '${property}' found.`, event.line, event.col, this);
       }
       properties[name] = event.value.text;
       lastName = name;
-    }
+    };
+
+    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, property);
   },
 });
 
@@ -997,7 +995,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     let gradients;
 
     parser.addListener('startrule', () => {
@@ -1026,7 +1023,7 @@ CSSLint.addRule({
       if (missing.length && missing.length < 4) {
         const {line, col} = event.selectors[0];
         reporter.report(`Missing vendor-prefixed CSS gradients for ${missing.join(', ')}.`,
-          line, col, rule);
+          line, col, this);
       }
     });
   },
@@ -1143,22 +1140,27 @@ CSSLint.addRule({
   init(parser, reporter) {
     let properties;
     let started = 0;
+
     const startRule = () => {
       started = 1;
       properties = [];
     };
+
+    const property = event => {
+      if (!started) return;
+      const name = event.property.text;
+      const lowerCasePrefixLessName = name.toLowerCase().replace(/^-.*?-/, '');
+      properties.push(lowerCasePrefixLessName);
+    };
+
     const endRule = event => {
       started = 0;
       if (properties.join(',') !== properties.sort().join(',')) {
         reporter.report("Rule doesn't have all its properties in alphabetical order.", event.line, event.col, this);
       }
     };
-    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, event => {
-      if (!started) return;
-      const name = event.property.text;
-      const lowerCasePrefixLessName = name.toLowerCase().replace(/^-.*?-/, '');
-      properties.push(lowerCasePrefixLessName);
-    });
+
+    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, property);
   },
 });
 
@@ -1387,7 +1389,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
     const propertiesToCheck = {};
     const mapping = {
       margin:  ['margin-top', 'margin-bottom', 'margin-left', 'margin-right'],
@@ -1422,7 +1423,7 @@ CSSLint.addRule({
         const total = fullList.reduce((sum = 0, name) => sum + (properties[name] ? 1 : 0));
         if (total === fullList.length) {
           reporter.report(`The properties ${fullList.join(', ')} can be replaced by ${short}.`,
-            event.line, event.col, rule);
+            event.line, event.col, this);
         }
       }
     };
@@ -1518,68 +1519,32 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
-
-    const headings = {
-      h1: 0,
-      h2: 0,
-      h3: 0,
-      h4: 0,
-      h5: 0,
-      h6: 0,
-    };
+    const headings = new Array(6).fill(0);
 
     parser.addListener('startrule', event => {
-      const selectors = event.selectors;
-      let selector, part, pseudo, i, j;
-
-      for (i = 0; i < selectors.length; i++) {
-        selector = selectors[i];
-        part = selector.parts[selector.parts.length - 1];
-
-        if (part.elementName && /(h[1-6])/i.test(part.elementName.toString())) {
-
-          for (j = 0; j < part.modifiers.length; j++) {
-            if (part.modifiers[j].type === 'pseudo') {
-              pseudo = true;
-              break;
-            }
-          }
-
-          if (!pseudo) {
-            headings[RegExp.$1]++;
-            if (headings[RegExp.$1] > 1) {
-              reporter.report('Heading (' + part.elementName + ') has already been defined.',
-                part.line, part.col, rule);
-            }
-          }
+      for (const {parts} of event.selectors) {
+        const part = parts[parts.length - 1];
+        if (!part.elementName || !/h([1-6])/i.test(part.elementName)) continue;
+        if (part.modifiers.some(mod => mod.type === 'pseudo')) continue;
+        if (++headings[Number(RegExp.$1) - 1] > 1) {
+          reporter.report(`Heading (${part.elementName}) has already been defined.`,
+            part.line, part.col, this);
         }
       }
     });
 
     parser.addListener('endstylesheet', () => {
-      let prop;
-      const
-        messages = [];
-
-      for (prop in headings) {
-        if (headings.hasOwnProperty(prop)) {
-          if (headings[prop] > 1) {
-            messages.push(headings[prop] + ' ' + prop + 's');
-          }
-        }
-      }
-
+      const messages = headings
+        .filter(h => h > 1)
+        .map((h, i) => `${h} H${i + 1}s`);
       if (messages.length) {
-        reporter.rollupWarn('You have ' + messages.join(', ') + ' defined in this stylesheet.', rule);
+        reporter.rollupWarn(`You have ${messages.join(', ')} defined in this stylesheet.`, this);
       }
     });
   },
-
 });
 
 CSSLint.addRule({
-
   id:       'universal-selector',
   name:     'Disallow universal selector',
   desc:     'The universal selector (*) is known to be slow.',
@@ -1587,27 +1552,18 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
-
     parser.addListener('startrule', event => {
-      const selectors = event.selectors;
-      let selector, part, i;
-
-      for (i = 0; i < selectors.length; i++) {
-        selector = selectors[i];
-
-        part = selector.parts[selector.parts.length - 1];
+      for (const {parts} of event.selectors) {
+        const part = parts[parts.length - 1];
         if (part.elementName === '*') {
-          reporter.report(rule.desc, part.line, part.col, rule);
+          reporter.report(this.desc, part.line, part.col, this);
         }
       }
     });
   },
-
 });
 
 CSSLint.addRule({
-
   id:       'unqualified-attributes',
   name:     'Disallow unqualified attribute selectors',
   desc:     'Unqualified attribute selectors are known to be slow.',
@@ -1615,47 +1571,24 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-
-    const rule = this;
-
     parser.addListener('startrule', event => {
+      for (const {parts} of event.selectors) {
+        const part = parts[parts.length - 1];
+        if (part.type !== parser.SELECTOR_PART_TYPE) continue;
+        if (part.modifiers.some(mod => mod.type === 'class' || mod.type === 'id')) continue;
 
-      const selectors = event.selectors;
-      let selectorContainsClassOrId = false;
-      let selector, part, modifier, i, k;
-
-      for (i = 0; i < selectors.length; i++) {
-        selector = selectors[i];
-
-        part = selector.parts[selector.parts.length - 1];
-        if (part.type === parser.SELECTOR_PART_TYPE) {
-          for (k = 0; k < part.modifiers.length; k++) {
-            modifier = part.modifiers[k];
-
-            if (modifier.type === 'class' || modifier.type === 'id') {
-              selectorContainsClassOrId = true;
-              break;
-            }
-          }
-
-          if (!selectorContainsClassOrId) {
-            for (k = 0; k < part.modifiers.length; k++) {
-              modifier = part.modifiers[k];
-              if (modifier.type === 'attribute' && (!part.elementName || part.elementName === '*')) {
-                reporter.report(rule.desc, part.line, part.col, rule);
-              }
-            }
+        const isUnqualified = !part.elementName || part.elementName === '*';
+        for (const mod of part.modifiers) {
+          if (mod.type === 'attribute' && isUnqualified) {
+            reporter.report(this.desc, part.line, part.col, this);
           }
         }
-
       }
     });
   },
-
 });
 
 CSSLint.addRule({
-
   id:       'vendor-prefix',
   name:     'Require standard property with vendor prefix',
   desc:     'When using a vendor-prefixed property, make sure to include the standard one.',
@@ -1663,8 +1596,6 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
-    let properties, num;
     const propertiesToCheck = {
       '-webkit-border-radius':              'border-radius',
       '-webkit-border-top-left-radius':     'border-top-left-radius',
@@ -1724,20 +1655,20 @@ CSSLint.addRule({
       '-moz-box-sizing':    'box-sizing',
       '-webkit-box-sizing': 'box-sizing',
     };
+    let properties, num, started;
 
-    // event handler for beginning of rules
-    function startRule() {
+    const startRule = () => {
+      started = 1;
       properties = {};
       num = 1;
-    }
+    };
 
-    // event handler for end of rules
-    function endRule() {
-      let prop, i, len, needed, actual;
+    const endRule = () => {
+      started = 0;
       const needsStandard = [];
 
-      for (prop in properties) {
-        if (propertiesToCheck[prop]) {
+      for (const prop in properties) {
+        if (prop in propertiesToCheck) {
           needsStandard.push({
             actual: prop,
             needed: propertiesToCheck[prop],
@@ -1745,58 +1676,33 @@ CSSLint.addRule({
         }
       }
 
-      for (i = 0, len = needsStandard.length; i < len; i++) {
-        needed = needsStandard[i].needed;
-        actual = needsStandard[i].actual;
-
+      for (const {needed, actual} of needsStandard) {
+        const {line, col} = properties[actual][0].name;
         if (!properties[needed]) {
-          reporter.report("Missing standard property '" + needed + "' to go along with '" + actual + "'.",
-            properties[actual][0].name.line, properties[actual][0].name.col, rule);
-        } else {
-          // make sure standard property is last
-          if (properties[needed][0].pos < properties[actual][0].pos) {
-            reporter.report(
-              "Standard property '" + needed + "' should come after vendor-prefixed property '" + actual + "'.",
-              properties[actual][0].name.line, properties[actual][0].name.col, rule);
-          }
+          reporter.report(`Missing standard property '${needed}' to go along with '${actual}'.`,
+            line, col, this);
+        } else if (properties[needed][0].pos < properties[actual][0].pos) {
+          reporter.report(`Standard property '${needed}' should come after vendor-prefixed property '${actual}'.`,
+            line, col, this);
         }
       }
+    };
 
-    }
-
-    parser.addListener('startrule', startRule);
-    parser.addListener('startfontface', startRule);
-    parser.addListener('startpage', startRule);
-    parser.addListener('startpagemargin', startRule);
-    parser.addListener('startkeyframerule', startRule);
-    parser.addListener('startviewport', startRule);
-
-    parser.addListener('property', event => {
+    CSSLint.Util.registerBlockEvents(parser, startRule, endRule, event => {
+      if (!started) return;
       const name = event.property.text.toLowerCase();
-
-      if (!properties[name]) {
-        properties[name] = [];
-      }
-
-      properties[name].push({
+      let prop = properties[name];
+      if (!prop) prop = properties[name] = [];
+      prop.push({
         name:  event.property,
         value: event.value,
         pos:   num++,
       });
     });
-
-    parser.addListener('endrule', endRule);
-    parser.addListener('endfontface', endRule);
-    parser.addListener('endpage', endRule);
-    parser.addListener('endpagemargin', endRule);
-    parser.addListener('endkeyframerule', endRule);
-    parser.addListener('endviewport', endRule);
   },
-
 });
 
 CSSLint.addRule({
-
   id:       'zero-units',
   name:     'Disallow units for 0 values',
   desc:     "You don't need to specify units when a value is 0.",
@@ -1804,26 +1710,14 @@ CSSLint.addRule({
   browsers: 'All',
 
   init(parser, reporter) {
-    const rule = this;
-
-    // count how many times "float" is used
     parser.addListener('property', event => {
-      const parts = event.value.parts;
-      let i = 0;
-      const
-        len = parts.length;
-
-      while (i < len) {
-        if ((parts[i].units || parts[i].type === 'percentage') && parts[i].value === 0 && parts[i].type !== 'time') {
-          reporter.report("Values of 0 shouldn't have units specified.", parts[i].line, parts[i].col, rule);
+      for (const {units, type, value, line, col} of event.value.parts) {
+        if ((units || type === 'percentage') && value === 0 && type !== 'time') {
+          reporter.report("Values of 0 shouldn't have units specified.", line, col, this);
         }
-        i++;
       }
-
     });
-
   },
-
 });
 
 //endregion
