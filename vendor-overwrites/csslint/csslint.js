@@ -194,7 +194,7 @@ var CSSLint = (() => {
         rules[id].init(parser, reporter));
 
       try {
-        parser.parse(text, {reuseCache: true});
+        parser.parse(text/*, {reuseCache: true}*/);
       } catch (ex) {
         reporter.error('Fatal error, cannot continue: ' + ex.message, ex.line, ex.col, {});
       }
@@ -213,7 +213,7 @@ var CSSLint = (() => {
         !a.rollup && b.rollup ? -1 :
         a.line - b.line);
 
-      parserlib.cache.feedback(report);
+      //parserlib.cache.feedback(report);
 
       return report;
     },
