@@ -26,7 +26,7 @@ self.onmessage = ({data: {action = 'run', code, config}}) => {
 
     case 'run': {
       const results = CSSLint.verify(code, config).messages
-        .filter(m => !m.message.includes('/*[[') && !m.message.includes(']]*/'))
+        //.filter(m => !m.message.includes('/*[[') && !m.message.includes(']]*/'))
         .map(m => Object.assign(m, {rule: {id: m.rule.id}}));
       self.postMessage(results);
       return;

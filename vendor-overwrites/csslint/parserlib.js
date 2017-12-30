@@ -648,9 +648,6 @@ self.parserlib = (() => {
 
       '<clip-source>': '<uri>',
 
-      // The SVG <color> spec doesn't include "currentColor" as a color.
-      '<color-svg>': part => part.type === 'color',
-
       '<column-gap>': 'normal | <length> | <percentage>',
 
       '<content-distribution>': 'space-between | space-around | space-evenly | stretch',
@@ -947,15 +944,9 @@ self.parserlib = (() => {
 
       '<line-names>': '<ident-not-span>*',
 
-      // Note that <color> here is "as defined in the SVG spec", which
-      // is more restrictive that the <color> defined in the CSS spec.
-      // none | currentColor | <color> [<icccolor>]? |
-      // <funciri> [ none | currentColor | <color> [<icccolor>]? ]?
-      '<paint>': '<paint-basic> | <uri> <paint-basic>?',
-
-      // Helper definition for <paint> above.
-      // Note: "transparent" is an accepted color now in SVG
-      '<paint-basic>': 'none | currentColor | <color-svg> <icccolor>? | transparent',
+      '<paint>': 'none | child | child() | <color> | ' +
+                 '<uri> [ none | currentColor | <color> ]? | ' +
+                 'context-fill | context-stroke',
 
       // Because our `alt` combinator is ordered, we need to test these
       // in order from longest possible match to shortest.
@@ -1022,6 +1013,9 @@ self.parserlib = (() => {
       'cubic-bezier': '<number>#{4}',
       'frames':       '<integer>',
       'steps':        '<integer> [ , [ start | end ] ]?',
+
+      // used in SVG2 <paint>
+      'child': '<integer>',
 
       'blur':        '<length>',
       'brightness':  '<number-percentage>',
@@ -1434,6 +1428,7 @@ self.parserlib = (() => {
     generation: null,
     stack: [],
     events: [],
+
     parser: null,
     stream: null,
     firstRun: true,
@@ -1444,13 +1439,13 @@ self.parserlib = (() => {
       this.stream = parser._tokenStream;
       this.firstRun = !this.stream;
       this.generation = performance.now();
+      this.numEvents = 0;
       this.trim();
     },
 
     addEvent(e) {
       if (!this.parser) return;
-      let i = this.stack.length;
-      while (--i >= 0) {
+      for (let i = this.stack.length; --i >= 0;) {
         const {offset, endOffset, events} = this.stack[i];
         if (e.offset >= offset && (!endOffset || e.offset <= endOffset)) {
           events.push(e);
@@ -1458,6 +1453,33 @@ self.parserlib = (() => {
         }
       }
       this.events.push(e);
+    },
+
+    feedback({messages}) {
+      messages = new Set(messages);
+      for (const blocks of this.data.values()) {
+        for (const block of blocks) {
+          if (!block.events.length) continue;
+          const {
+            startLine: L1,
+            startCol: C1,
+            endLine: L2,
+            endCol: C2,
+          } = block;
+          let isClean = true;
+          for (const msg of messages) {
+            const {line, col} = msg;
+            if (L1 === L2 && line === L1 && C1 <= col && col <= C2 ||
+                line === L1 && col >= C1 ||
+                line === L2 && col <= C2 ||
+                line > L1 && line < L2) {
+              messages.delete(msg);
+              isClean = false;
+            }
+          }
+          if (isClean) block.events.length = 0;
+        }
+      }
     },
 
     findOrStartBlock(token) {
@@ -2765,9 +2787,6 @@ self.parserlib = (() => {
      * @return {void}
      */
     mustMatch(tokenTypes) {
-      if (tokenTypes !== Tokens.USO_VAR && this.match(Tokens.USO_VAR)) {
-
-      }
       if (!this.match(tokenTypes)) {
         const {startLine: line, startCol: col, offset} = this.LT(1);
         const info = Tokens[Array.isArray(tokenTypes) ? tokenTypes[0] : tokenTypes];
@@ -2907,6 +2926,18 @@ self.parserlib = (() => {
   //region TokenStream
 
   class TokenStream extends TokenStreamBase {
+
+    mustMatch(tokenTypes) {
+      this._skipUsoVar();
+      super.mustMatch(tokenTypes);
+    }
+
+    _skipUsoVar() {
+      const lt1 = this._lt[this._ltIndex] || this.LT(1);
+      if (lt1.type !== Tokens.USO_VAR) return;
+      while (this.match([Tokens.USO_VAR, Tokens.S])) { /*NOP*/ }
+    }
+
     /**
      * A token stream that produces CSS tokens.
      */
@@ -3834,6 +3865,8 @@ self.parserlib = (() => {
     fire(event, token = this._tokenStream._token) {
       if (typeof event === 'string') {
         event = {type: event};
+      } else if (event.message && event.message.includes('/*[[')) {
+        return;
       }
       if (event.offset === undefined && token) {
         event.offset = token.offset;
@@ -4707,7 +4740,7 @@ self.parserlib = (() => {
       try {
         if (parserCache.findOrStartBlock()) return true;
 
-        if (this._tokenStream.match(Tokens.USO_VAR)) this._ws();
+        this._tokenStream._skipUsoVar();
 
         const selectors = this._selectorsGroup();
         if (selectors) {
@@ -4792,12 +4825,12 @@ self.parserlib = (() => {
         if (combinator) {
           selector.push(combinator);
           nextSelector = this._simpleSelectorSequence();
-          if (!nextSelector) {
-            this._unexpectedToken(stream.LT(1));
-            break;
+          if (nextSelector) {
+            selector.push(nextSelector);
+            continue;
           }
-          selector.push(nextSelector);
-          continue;
+          this._unexpectedToken(stream.LT(1));
+          break;
         }
 
         if (!this._ws()) break;
@@ -5168,11 +5201,6 @@ self.parserlib = (() => {
 
       const property = this._property();
       if (!property) {
-        if (stream.match(Tokens.USO_VAR)) {
-          this._ws();
-          while (consumeSemicolon && stream.match([Tokens.SEMICOLON, Tokens.S])) { /*NOP*/ }
-          return true;
-        }
         return false;
       }
 
@@ -5212,13 +5240,17 @@ self.parserlib = (() => {
         invalid = ex;
       }
 
-      this.fire({
+      const event = {
         type: 'property',
         property,
         value,
         important,
-        invalid,
-      }, property);
+      };
+      if (invalid) {
+        event.invalid = invalid;
+        event.message = invalid.message;
+      }
+      this.fire(event, property);
 
       if (consumeSemicolon) stream.match(Tokens.SEMICOLON);
       return true;
@@ -5388,26 +5420,25 @@ self.parserlib = (() => {
         return finalize(token, value);
       }
 
-      // see if there's a simple match
-      if (stream.match([
-        Tokens.NUMBER,
-        Tokens.PERCENTAGE,
-        Tokens.LENGTH,
-        Tokens.ANGLE,
-        Tokens.TIME,
-        Tokens.DIMENSION,
-        Tokens.FREQ,
-        Tokens.STRING,
-        inFunction === 'var' && Tokens.CUSTOM_PROP,
-        Tokens.IDENT,
-        Tokens.URI,
-        Tokens.UNICODE_RANGE,
-        Tokens.USO_VAR,
-      ])) {
-        return finalize(stream._token);
-      }
-
-      return finalize(this._hexcolor() || this._function({asText: unary}));
+      return finalize(
+        // see if there's a simple match
+        stream.match([
+          Tokens.NUMBER,
+          Tokens.PERCENTAGE,
+          Tokens.LENGTH,
+          Tokens.ANGLE,
+          Tokens.TIME,
+          Tokens.DIMENSION,
+          Tokens.FREQ,
+          Tokens.STRING,
+          inFunction === 'var' && Tokens.CUSTOM_PROP,
+          Tokens.IDENT,
+          Tokens.URI,
+          Tokens.UNICODE_RANGE,
+          Tokens.USO_VAR,
+        ]) && stream._token ||
+        this._hexcolor() ||
+        this._function({asText: unary}));
     }
 
     /*
@@ -5784,7 +5815,6 @@ self.parserlib = (() => {
      * @param {Object} token The token that was found.
      */
     _unexpectedToken(token) {
-      if (token.type === Tokens.USO_VAR) return;
       const {value, startLine: line, startCol: col} = token;
       throw new SyntaxError(`Unexpected token '${value}' at line ${line}, col ${col}.`, token);
     }
@@ -5911,7 +5941,8 @@ self.parserlib = (() => {
       SyntaxUnit,
       EventTarget,
       TokenStreamBase,
-    }
+    },
+    cache: parserCache,
   };
 
   //endregion

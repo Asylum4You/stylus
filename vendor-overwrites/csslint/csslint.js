@@ -213,6 +213,8 @@ var CSSLint = (() => {
         !a.rollup && b.rollup ? -1 :
         a.line - b.line);
 
+      parserlib.cache.feedback(report);
+
       return report;
     },
   });
