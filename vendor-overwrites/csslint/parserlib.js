@@ -1420,46 +1420,243 @@ self.parserlib = (() => {
   //endregion
   //region parserCache
 
-  const parserCache = {
-    MAX_DURATION: 10 * 60e3,
-    TRIM_DELAY: 10e3,
+  /**
+   * Caches the results and reuses them on subsequent parsing of the same code
+   */
+  const parserCache = (() => {
+    const MAX_DURATION = 10 * 60e3;
+    const TRIM_DELAY = 10e3;
 
-    data: new Map(),
-    generation: null,
-    stack: [],
-    events: [],
+    const data = new Map();
+    const stack = [];
 
-    parser: null,
-    stream: null,
-    firstRun: true,
+    let generation = null;
+    let firstRun = true;
+    let parser = null;
+    let stream = null;
 
-    start(parser) {
-      this.firstRun = !this.parser;
-      this.parser = parser;
+    return {
+      start,
+      addEvent,
+      findOrStartBlock,
+      startBlock,
+      adjustBlockStart,
+      endBlock,
+      cancelBlock: () => stack.pop(),
+      feedback,
+    };
+
+    /**
+     * Enables caching on the provided parser
+     * @param {Parser} newParser - use a falsy value to disable
+     */
+    function start(newParser) {
+      firstRun = !parser;
+      parser = newParser;
       if (!parser) return;
-      this.stream = parser._tokenStream;
-      this.generation = performance.now();
-      this.numEvents = 0;
-      this.trim();
-    },
+      stream = parser._tokenStream;
+      generation = performance.now();
+      trim();
+    }
 
-    addEvent(e) {
-      if (!this.parser) return;
-      for (let i = this.stack.length; --i >= 0;) {
-        const {offset, endOffset, events} = this.stack[i];
-        if (e.offset >= offset && (!endOffset || e.offset <= endOffset)) {
-          events.push(e);
+    /**
+     * Adds the event into a matching nested open block which is currently being processed by the parser.
+     * @param {{offset, ...}} event - the event's `offset` property is used to determine the matching block
+     */
+    function addEvent(event) {
+      if (!parser) return;
+      for (let i = stack.length; --i >= 0;) {
+        const {offset, endOffset, events} = stack[i];
+        if (event.offset >= offset && (!endOffset || event.offset <= endOffset)) {
+          events.push(event);
           return;
         }
       }
-      //this.events.push(e);
-    },
+    }
 
-    feedback({messages}) {
+    /**
+     * Finds a cached block or starts a new one otherwise
+     * @param {(Token|SyntaxUnit)} [token = TokenStream::LT(1)]
+     * @returns {boolean} true = cached block found; false = started a new one
+     */
+    function findOrStartBlock(token = getToken()) {
+      return findBlock(token) ||
+             startBlock(token) && false;
+    }
+
+    /**
+     * Starts a nested block so it can accumulate subsequent events
+     * @param {(Token|SyntaxUnit)} [start = TokenStream::LT(1)]
+     */
+    function startBlock(start = getToken()) {
+      if (!parser) return;
+      stack.push({
+        text: '',
+        events: [],
+        generation: generation,
+        startLine: start.startLine || start.line,
+        startCol: start.startCol || start.col,
+        offset: start.offset,
+        endLine: undefined,
+        endCol: undefined,
+        endOffset: undefined,
+      });
+    }
+
+    /**
+     * Adjusts the start position of an already started block
+     * @param {(Token|SyntaxUnit)} [start = TokenStream::LT(1)]
+     */
+    function adjustBlockStart(start = getToken()) {
+      if (!parser) return;
+      const block = stack[stack.length - 1];
+      block.startLine = start.startLine || start.line;
+      block.startCol = start.startCol || start.col;
+      block.offset = start.offset;
+    }
+
+    /**
+     * Closes the last opened block at the specified position and stores it in the cache
+     * @param {(Token|SyntaxUnit)} [token = TokenStream::LT(1)]
+     */
+    function endBlock(end = getToken()) {
+      if (!parser) return;
+      const block = stack.pop();
+      block.endLine = end.startLine || end.line;
+      block.endCol = (end.startCol || end.col) + end.value.length;
+      block.endOffset = end.offset + end.value.length;
+
+      const input = stream._reader._input;
+      const key = input.slice(block.offset, input.indexOf('{', block.offset) + 1);
+      block.text = input.slice(block.offset, block.endOffset);
+
+      let blocks = data.get(key);
+      if (!blocks) data.set(key, (blocks = []));
+      blocks.push(block);
+    }
+
+    /**
+     * Tries to find a cached block that matches the input text at specified token's position.
+     * The nearest matching block is used to advance the parser's stream and reader.
+     * @param {(Token|SyntaxUnit)} [token = TokenStream::LT(1)]
+     */
+    function findBlock(token = getToken()) {
+      if (!parser || firstRun || !token) return;
+
+      const reader = stream._reader;
+      const input = reader._input;
+      let start = token.offset;
+      if (isWhitespace(input[start])) {
+        const rx = /\s*/y;
+        rx.lastIndex = start;
+        rx.exec(input);
+        start = rx.lastIndex;
+      }
+      const key = input.slice(start, input.indexOf('{', start) + 1);
+      const blocks = data.get(key);
+      if (!blocks) return;
+
+      const block = getBlock(blocks, input, start, key);
+      if (!block) return;
+
+      reader.readCount(start - reader._cursor);
+      shiftBlock(reader, start, block);
+      shiftStream(reader, block);
+      parser._ws();
+      return true;
+    }
+
+    function getBlock(blocks, input, start, key) {
+      // extracted to prevent V8 deopt
+      const check1 = input[start];
+      const keyLast = Math.max(key.length - 1);
+      const check2 = input[start + keyLast];
+      const block = blocks
+        .filter(({text, offset, endOffset}) =>
+          text[0] === check1 &&
+          text[keyLast] === check2 &&
+          text[text.length - 1] === input[start + text.length - 1] &&
+          text.startsWith(key) &&
+          text === input.substr(start, endOffset - offset))
+        .sort((a, b) =>
+          // newest and closest will be the last element
+          b.generation - a.generation +
+          Math.abs(b.offset - start) - Math.abs(a.offset - start))
+        .pop();
+      return block;
+    }
+
+    function shiftBlock(reader, start, block) {
+      // extracted to prevent V8 deopt
+      const deltaLines = reader._line - block.startLine;
+      const deltaCols = block.startCol === 1 && reader._col === 1 ? 0 : reader._col - block.startCol;
+      const deltaOffs = reader._cursor - block.offset;
+      const hasDelta = deltaLines || deltaCols || deltaOffs;
+      const shifted = new Set();
+      for (const e of block.events) {
+        if (hasDelta) {
+          applyDelta(e, shifted, block.startLine, deltaLines, deltaCols, deltaOffs);
+        }
+        parser.fire(e, false);
+      }
+      block.generation = generation;
+      block.endCol += block.endLine === block.startLine ? deltaCols : 0;
+      block.endLine += deltaLines;
+      block.endOffset = reader._cursor + block.text.length;
+      block.startLine += deltaLines;
+      block.startCol += deltaCols;
+      block.offset = reader._cursor;
+    }
+
+    function shiftStream(reader, block) {
+      reader._line = block.endLine;
+      reader._col = block.endCol;
+      reader._cursor = block.endOffset;
+
+      stream._lt.length = 0;
+      stream._ltIndexCache.length = 0;
+      stream._ltIndex = 0;
+      stream._token = undefined;
+    }
+
+    /**
+     * Removes old entries from the cache.
+     * 'Old' means older than MAX_DURATION or half the blocks from the previous generation(s).
+     * @param {Boolean} [immediately] - set internally when debounced by TRIM_DELAY
+     */
+    function trim(immediately) {
+      if (!immediately) {
+        clearTimeout(trim.timer);
+        trim.timer = setTimeout(trim, TRIM_DELAY, true);
+        return;
+      }
+      const cutoff = performance.now() - MAX_DURATION;
+      for (const [key, blocks] of data.entries()) {
+        const halfLen = blocks.length >> 1;
+        const newBlocks = blocks
+          .sort((a, b) => a.time - b.time)
+          .filter((block, i) => block.generation > cutoff ||
+                                block.generation !== generation && i < halfLen);
+        if (!newBlocks.length) {
+          data.delete(key);
+        } else if (newBlocks.length !== blocks.length) {
+          data.set(key, newBlocks);
+        }
+      }
+    }
+
+    /**
+     * Uses the provided CSSLint report to decide which blocks should keep their events.
+     * Blocks that didn't cause any messages in CSSLint's rules report are stripped of their events.
+     * @param {{line, col, ...}[]} messages
+     * @todo retain stats and rollups in the report
+     */
+    function feedback({messages}) {
       messages = new Set(messages);
-      for (const blocks of this.data.values()) {
+      for (const blocks of data.values()) {
         for (const block of blocks) {
           if (!block.events.length) continue;
+          if (block.generation !== generation) continue;
           const {
             startLine: L1,
             startCol: C1,
@@ -1480,169 +1677,53 @@ self.parserlib = (() => {
           if (isClean) block.events.length = 0;
         }
       }
-    },
+    }
 
-    findOrStartBlock(token) {
-      return this.findBlock(token) ||
-             this.startBlock(token) && false;
-    },
-
-    startBlock(token = this.token()) {
-      if (!this.parser) return;
-      this.stack.push({
-        text: '',
-        events: [],
-        generation: this.generation,
-        startLine: token.startLine || token.line,
-        startCol: token.startCol || token.col,
-        offset: token.offset,
-        endLine: undefined,
-        endCol: undefined,
-        endOffset: undefined,
-      });
-    },
-
-    adjustStart(token = this.token()) {
-      if (!this.parser) return;
-      const block = this.stack[this.stack.length - 1];
-      block.startLine = token.startLine || token.line;
-      block.startCol = token.startCol || token.col;
-      block.offset = token.offset;
-    },
-
-    endBlock(end = this.token()) {
-      if (!this.parser) return;
-      const block = this.stack.pop();
-      block.endLine = end.startLine || end.line;
-      block.endCol = (end.startCol || end.col) + end.value.length;
-      block.endOffset = end.offset + end.value.length;
-
-      const input = this.stream._reader._input;
-      const key = input.slice(block.offset, input.indexOf('{', block.offset) + 1);
-      block.text = input.slice(block.offset, block.endOffset);
-
-      let blocks = this.data.get(key);
-      if (!blocks) this.data.set(key, (blocks = []));
-      blocks.push(block);
-    },
-
-    findBlock(token = this.token()) {
-      if (!this.parser || this.firstRun || !token) return;
-
-      const stream = this.stream;
-      const reader = stream._reader;
-      const input = reader._input;
-      let start = token.offset;
-      if (isWhitespace(input[token.offset])) {
-        const rx = /\s*/y;
-        rx.lastIndex = start;
-        rx.exec(input);
-        start = rx.lastIndex;
-      }
-      const key = input.slice(start, input.indexOf('{', start) + 1);
-      const blocks = this.data.get(key);
-      if (!blocks) return;
-
-      const check1 = input[start];
-      const check2 = input[start + key.length];
-      const block = blocks
-        .filter(({text, offset, endOffset}) =>
-          text[0] === check1 &&
-          text[key.length] === check2 &&
-          text[text.length - 1] === input[start + text.length - 1] &&
-          text.startsWith(key) &&
-          text === input.substr(start, endOffset - offset))
-        .sort((a, b) =>
-          // newest and closest will be the last element
-          b.generation - a.generation +
-          Math.abs(b.offset - start) - Math.abs(a.offset - start))
-        .pop();
-      if (!block) return;
-
-      reader.readCount(start - reader._cursor);
-      const deltaLines = reader._line - block.startLine;
-      const deltaCols = block.startCol === 1 && reader._col === 1 ? 0 : reader._col - block.startCol;
-      const deltaOffs = reader._cursor - block.offset;
-      const shifted = new Set();
-      for (const e of block.events) {
-        if (deltaLines || deltaCols || deltaOffs) {
-          this.applyDelta(e, shifted, block.startLine, deltaLines, deltaCols, deltaOffs);
-        }
-        this.parser.fire(e, false);
-      }
-      block.generation = this.generation;
-      block.endCol += block.endLine === block.startLine ? deltaCols : 0;
-      block.endLine += deltaLines;
-      block.endOffset = reader._cursor + block.text.length;
-      block.startLine += deltaLines;
-      block.startCol += deltaCols;
-      block.offset = reader._cursor;
-
-      reader._line = block.endLine;
-      reader._col = block.endCol;
-      reader._cursor = block.endOffset;
-
-      stream._lt.length = 0;
-      stream._ltIndexCache.length = 0;
-      stream._ltIndex = 0;
-      stream._token = undefined;
-      this.parser._ws();
-      return true;
-    },
-
-    trim(self) {
-      if (!self) {
-        clearTimeout(this.trim.timer);
-        this.trim.timer = setTimeout(this.trim, this.TRIM_DELAY, this);
-        return;
-      }
-      const cutoff = performance.now() - self.MAX_DURATION;
-      for (const [key, blocks] of self.data.entries()) {
-        const halfLen = blocks.length >> 1;
-        const newBlocks = blocks
-          .sort((a, b) => a.time - b.time)
-          .filter((block, i) => block.generation > cutoff || i < halfLen);
-        if (!newBlocks.length) {
-          self.data.delete(key);
-        } else if (newBlocks.length !== blocks.length) {
-          self.data.set(key, newBlocks);
-        }
-      }
-    },
-
-    applyDelta(obj, seen, startLine, lines, cols, offs) {
+    // Recursively applies the delta to the event and all its nested parts
+    function applyDelta(obj, seen, startLine, lines, cols, offs) {
       if (seen.has(obj)) return;
       seen.add(obj);
-
       if (Array.isArray(obj)) {
         for (const item of obj) {
-          if (typeof item === 'object' || Array.isArray(item)) {
-            this.applyDelta(item, seen, startLine, lines, cols, offs);
+          if ((typeof item === 'object' || Array.isArray(item)) && item) {
+            applyDelta(item, seen, startLine, lines, cols, offs);
           }
         }
         return;
       }
+      // applyDelta may get surpisingly slow on complex objects so we're using an array
+      // because in js an array lookup is much faster than a property lookup
+      const keys = Object.keys(obj);
       if (cols !== 0) {
-        if (obj.startCol && obj.startLine === startLine) obj.col += cols;
-        if (obj.endCol && obj.endLine === startLine) obj.endCol += cols;
-        if (obj.col && obj.line === startLine) obj.col += cols;
+        if (keys.includes('startCol') && obj.startLine === startLine) obj.col += cols;
+        if (keys.includes('endCol') && obj.endLine === startLine) obj.endCol += cols;
+        if (keys.includes('col') && obj.line === startLine) obj.col += cols;
       }
       if (lines !== 0) {
-        if (obj.line) obj.line += lines;
-        if (obj.endLine) obj.endLine += lines;
-        if (obj.startLine) obj.startLine += lines;
+        if (keys.includes('line')) obj.line += lines;
+        if (keys.includes('endLine')) obj.endLine += lines;
+        if (keys.includes('startLine')) obj.startLine += lines;
       }
-      if (offs !== 0 && obj.offset !== undefined) obj.offset += offs;
-      for (const k in obj) {
-        const v = obj[k];
-        if (v && typeof v === 'object') this.applyDelta(v, seen, startLine, lines, cols, offs);
+      if (offs !== 0 && keys.includes('offset')) obj.offset += offs;
+      for (const k of keys) {
+        if (k !== 'col' && k !== 'startCol' && k !== 'endCol' &&
+            k !== 'line' && k !== 'startLine' && k !== 'endLine' &&
+            k !== 'offset') {
+          const v = obj[k];
+          if (v && typeof v === 'object') {
+            applyDelta(v, seen, startLine, lines, cols, offs);
+          }
+        }
       }
-    },
-
-    token() {
-      return this.parser ? this.stream._lt[this.stream._ltIndex] || this.stream._token : null;
     }
-  };
+
+    // returns TokenStream::LT(1) or null
+    function getToken() {
+      return parser ?
+        stream._lt[stream._ltIndex] || stream._token :
+        null;
+    }
+  })();
 
   //endregion
   //region EventTarget
@@ -4721,11 +4802,11 @@ self.parserlib = (() => {
 
         const selectors = this._selectorsGroup();
         if (!selectors) {
-          parserCache.stack.pop();
+          parserCache.cancelBlock();
           return selectors;
         }
 
-        parserCache.adjustStart(selectors[0]);
+        parserCache.adjustBlockStart(selectors[0]);
         this.fire({
           type: 'startrule',
           selectors,
@@ -4743,7 +4824,7 @@ self.parserlib = (() => {
         return selectors;
 
       } catch (ex) {
-        parserCache.stack.pop();
+        parserCache.cancelBlock();
         if (!(ex instanceof SyntaxError) || this.options.strict) throw ex;
         this.fire(Object.assign({}, ex, {type: 'error', error: ex}));
         // if there's a right brace, the rule is finished so don't do anything
