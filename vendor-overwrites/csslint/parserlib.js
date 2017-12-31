@@ -1427,10 +1427,16 @@ self.parserlib = (() => {
     const MAX_DURATION = 10 * 60e3;
     const TRIM_DELAY = 10e3;
 
+    // all blocks since page load; key = text between block start and { inclusive
     const data = new Map();
+    // nested block stack
     const stack = [];
-
+    // performance.now() of the current parser
     let generation = null;
+    // performance.now() of the first parser after reset or page load,
+    // used for weighted sorting in getBlock()
+    let generationBase = null;
+    // true on page load, first run is pure analysis
     let firstRun = true;
     let parser = null;
     let stream = null;
@@ -1438,7 +1444,7 @@ self.parserlib = (() => {
     return {
       start,
       addEvent,
-      findOrStartBlock,
+      findBlock,
       startBlock,
       adjustBlockStart,
       endBlock,
@@ -1451,11 +1457,11 @@ self.parserlib = (() => {
      * @param {Parser} newParser - use a falsy value to disable
      */
     function start(newParser) {
-      firstRun = !parser;
       parser = newParser;
       if (!parser) return;
+      if (firstRun) firstRun = false;
       stream = parser._tokenStream;
-      generation = performance.now();
+      generation = generationBase = performance.now();
       trim();
     }
 
@@ -1472,16 +1478,6 @@ self.parserlib = (() => {
           return;
         }
       }
-    }
-
-    /**
-     * Finds a cached block or starts a new one otherwise
-     * @param {(Token|SyntaxUnit)} [token = TokenStream::LT(1)]
-     * @returns {boolean} true = cached block found; false = started a new one
-     */
-    function findOrStartBlock(token = getToken()) {
-      return findBlock(token) ||
-             startBlock(token) && false;
     }
 
     /**
@@ -1566,59 +1562,6 @@ self.parserlib = (() => {
       return true;
     }
 
-    function getBlock(blocks, input, start, key) {
-      // extracted to prevent V8 deopt
-      const check1 = input[start];
-      const keyLast = Math.max(key.length - 1);
-      const check2 = input[start + keyLast];
-      const block = blocks
-        .filter(({text, offset, endOffset}) =>
-          text[0] === check1 &&
-          text[keyLast] === check2 &&
-          text[text.length - 1] === input[start + text.length - 1] &&
-          text.startsWith(key) &&
-          text === input.substr(start, endOffset - offset))
-        .sort((a, b) =>
-          // newest and closest will be the last element
-          b.generation - a.generation +
-          Math.abs(b.offset - start) - Math.abs(a.offset - start))
-        .pop();
-      return block;
-    }
-
-    function shiftBlock(reader, start, block) {
-      // extracted to prevent V8 deopt
-      const deltaLines = reader._line - block.startLine;
-      const deltaCols = block.startCol === 1 && reader._col === 1 ? 0 : reader._col - block.startCol;
-      const deltaOffs = reader._cursor - block.offset;
-      const hasDelta = deltaLines || deltaCols || deltaOffs;
-      const shifted = new Set();
-      for (const e of block.events) {
-        if (hasDelta) {
-          applyDelta(e, shifted, block.startLine, deltaLines, deltaCols, deltaOffs);
-        }
-        parser.fire(e, false);
-      }
-      block.generation = generation;
-      block.endCol += block.endLine === block.startLine ? deltaCols : 0;
-      block.endLine += deltaLines;
-      block.endOffset = reader._cursor + block.text.length;
-      block.startLine += deltaLines;
-      block.startCol += deltaCols;
-      block.offset = reader._cursor;
-    }
-
-    function shiftStream(reader, block) {
-      reader._line = block.endLine;
-      reader._col = block.endCol;
-      reader._cursor = block.endOffset;
-
-      stream._lt.length = 0;
-      stream._ltIndexCache.length = 0;
-      stream._ltIndex = 0;
-      stream._token = undefined;
-    }
-
     /**
      * Removes old entries from the cache.
      * 'Old' means older than MAX_DURATION or half the blocks from the previous generation(s).
@@ -1678,6 +1621,63 @@ self.parserlib = (() => {
         }
       }
     }
+
+    // gets the matching block
+    function getBlock(blocks, input, start, key) {
+      // extracted to prevent V8 deopt
+      const keyLast = Math.max(key.length - 1);
+      const check1 = input[start];
+      const check2 = input[start + keyLast];
+      const generationSpan = performance.now() - generationBase;
+      const block = blocks
+        .filter(({text, offset, endOffset}) =>
+          text[0] === check1 &&
+          text[keyLast] === check2 &&
+          text[text.length - 1] === input[start + text.length - 1] &&
+          text.startsWith(key) &&
+          text === input.substr(start, endOffset - offset))
+        .sort((a, b) =>
+          // newest and closest will be the last element
+          (b.generation - a.generation) / generationSpan +
+          (Math.abs(b.offset - start) - Math.abs(a.offset - start)) / input.length)
+        .pop();
+      return block;
+    }
+
+    // Shifts positions of the block and its events, also fires the events
+    function shiftBlock(reader, start, block) {
+      // extracted to prevent V8 deopt
+      const deltaLines = reader._line - block.startLine;
+      const deltaCols = block.startCol === 1 && reader._col === 1 ? 0 : reader._col - block.startCol;
+      const deltaOffs = reader._cursor - block.offset;
+      const hasDelta = deltaLines || deltaCols || deltaOffs;
+      const shifted = new Set();
+      for (const e of block.events) {
+        if (hasDelta) {
+          applyDelta(e, shifted, block.startLine, deltaLines, deltaCols, deltaOffs);
+        }
+        parser.fire(e, false);
+      }
+      block.generation = generation;
+      block.endCol += block.endLine === block.startLine ? deltaCols : 0;
+      block.endLine += deltaLines;
+      block.endOffset = reader._cursor + block.text.length;
+      block.startLine += deltaLines;
+      block.startCol += deltaCols;
+      block.offset = reader._cursor;
+    }
+
+    function shiftStream(reader, block) {
+      reader._line = block.endLine;
+      reader._col = block.endCol;
+      reader._cursor = block.endOffset;
+
+      stream._lt.length = 0;
+      stream._ltIndexCache.length = 0;
+      stream._ltIndex = 0;
+      stream._token = undefined;
+    }
+
 
     // Recursively applies the delta to the event and all its nested parts
     function applyDelta(obj, seen, startLine, lines, cols, offs) {
@@ -4796,32 +4796,35 @@ self.parserlib = (() => {
      */
     _ruleset() {
       try {
-        if (parserCache.findOrStartBlock()) return true;
-
         this._tokenStream._skipUsoVar();
+
+        if (parserCache.findBlock()) return true;
+        parserCache.startBlock();
 
         const selectors = this._selectorsGroup();
         if (!selectors) {
           parserCache.cancelBlock();
-          return selectors;
+          return false;
         }
 
         parserCache.adjustBlockStart(selectors[0]);
+
         this.fire({
           type: 'startrule',
           selectors,
         }, selectors[0]);
 
-        this._readDeclarations({stopOnBrace: true});
+        this._readDeclarations({stopAfterBrace: true});
 
         this.fire({
           type: 'endrule',
           selectors,
         });
+
         parserCache.endBlock();
 
         this._ws();
-        return selectors;
+        return true;
 
       } catch (ex) {
         parserCache.cancelBlock();
@@ -5806,7 +5809,7 @@ self.parserlib = (() => {
     _readDeclarations({
       checkStart = true,
       readMargins = false,
-      stopOnBrace = false
+      stopAfterBrace = false
     } = {}) {
       const stream = this._tokenStream;
 
@@ -5822,7 +5825,7 @@ self.parserlib = (() => {
           if (!this._declaration(true)) break;
         }
         stream.mustMatch(Tokens.RBRACE);
-        if (!stopOnBrace) this._ws();
+        if (!stopAfterBrace) this._ws();
         return;
 
       } catch (ex) {
@@ -5835,7 +5838,7 @@ self.parserlib = (() => {
         switch (stream.advance([Tokens.SEMICOLON, Tokens.RBRACE])) {
           case Tokens.SEMICOLON:
             // see if there's another declaration
-            this._readDeclarations({checkStart: false, readMargins, stopOnBrace});
+            this._readDeclarations({checkStart: false, readMargins, stopAfterBrace});
             return;
           case Tokens.RBRACE:
             // the rule is finished
