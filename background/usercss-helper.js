@@ -132,5 +132,8 @@ var usercssHelper = (() => {
     });
   }
 
+  window.saveUsercss = save;
+  window.buildUsercss = build;
+
   return {build, save, findDup, openInstallPage};
 })();

@@ -490,7 +490,7 @@ function invokeOrPostpone(isInvoke, fn, ...args) {
 }
 
 
-function openEditor(id) {
+function openEditor({id}) {
   let url = '/edit.html';
   if (id) {
     url += `?id=${id}`;

@@ -390,7 +390,7 @@ function onRuntimeMessage(request, sender, sendResponseInternal) {
       return KEEP_CHANNEL_OPEN;
 
     case 'openEditor':
-      openEditor(request.id);
+      openEditor(request);
       return;
 
     case 'detectSloppyRegexps':

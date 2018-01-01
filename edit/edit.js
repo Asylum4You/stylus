@@ -44,7 +44,7 @@ Promise.all([
   if (usercss) {
     editor = createSourceEditor(style);
   } else {
-    initWithSectionStyle({style});
+    initWithSectionStyle(style);
     document.addEventListener('wheel', scrollEntirePageOnCtrlShift);
   }
 });
@@ -154,15 +154,21 @@ function onRuntimeMessage(request) {
       if (styleId && styleId === request.style.id &&
           request.reason !== 'editSave' &&
           request.reason !== 'config') {
-        // code-less style from notifyAllTabs
-        if ((request.style.sections[0] || {}).code === null) {
-          request.style = BG.cachedStyles.byId.get(request.style.id);
-        }
-        if (isUsercss(request.style)) {
-          editor.replaceStyle(request.style, request.codeIsUpdated);
-        } else {
-          initWithSectionStyle(request);
-        }
+        Promise.resolve(() => {
+          // code-less style from notifyAllTabs
+          const style = request.style;
+          if ((style.sections[0] || {}).code === null) {
+            return API.getStyles({id: style.id});
+          } else {
+            return [style];
+          }
+        }).then(([style]) => {
+          if (isUsercss(style)) {
+            editor.replaceStyle(style, request.codeIsUpdated);
+          } else {
+            initWithSectionStyle(style, request.codeIsUpdated);
+          }
+        });
       }
       break;
     case 'styleDeleted':
