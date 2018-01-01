@@ -1629,7 +1629,7 @@ self.parserlib = (() => {
       const check1 = input[start];
       const check2 = input[start + keyLast];
       const generationSpan = performance.now() - generationBase;
-      const block = blocks
+      blocks = blocks
         .filter(({text, offset, endOffset}) =>
           text[0] === check1 &&
           text[keyLast] === check2 &&
@@ -1637,11 +1637,13 @@ self.parserlib = (() => {
           text.startsWith(key) &&
           text === input.substr(start, endOffset - offset))
         .sort((a, b) =>
-          // newest and closest will be the last element
-          (b.generation - a.generation) / generationSpan +
-          (Math.abs(b.offset - start) - Math.abs(a.offset - start)) / input.length)
-        .pop();
-      return block;
+          // newest and closest will be the first element
+          (a.generation - b.generation) / generationSpan +
+          (Math.abs(a.offset - start) - Math.abs(b.offset - start)) / input.length);
+      // identical blocks may produce different reports in CSSLint
+      // so we need to either hijack an older generation block or make a clone
+      const block = blocks.find(b => b.generation !== generation);
+      return block || deepCopy(blocks[0]);
     }
 
     // Shifts positions of the block and its events, also fires the events
@@ -1677,7 +1679,6 @@ self.parserlib = (() => {
       stream._ltIndex = 0;
       stream._token = undefined;
     }
-
 
     // Recursively applies the delta to the event and all its nested parts
     function applyDelta(obj, seen, startLine, lines, cols, offs) {
@@ -1722,6 +1723,21 @@ self.parserlib = (() => {
       return parser ?
         stream._lt[stream._ltIndex] || stream._token :
         null;
+    }
+
+    function deepCopy(obj) {
+      if (!obj || typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) {
+        return obj.map(v => !v || typeof v !== 'object' ? v : deepCopy(v));
+      }
+      const copy = {};
+      const hasOwnProperty = Object.prototype.hasOwnProperty;
+      for (const k in obj) {
+        if (!hasOwnProperty.call(obj, k)) continue;
+        const v = obj[k];
+        copy[k] = !v || typeof v !== 'object' ? v : deepCopy(v);
+      }
+      return copy;
     }
   })();
 
