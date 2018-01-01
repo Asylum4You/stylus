@@ -16,6 +16,7 @@ globals:
   OPERA: false
   URLS: false
   BG: false
+  API: false
   notifyAllTabs: false
   sendMessage: false
   queryTabs: false
@@ -63,6 +64,10 @@ globals:
   # prefs.js
   prefs: false
   setupLivePrefs: false
+  # storage-api.js
+  chromeLocal: false
+  chromeSync: false
+  LZString: false
 
 rules:
   accessor-pairs: [2]

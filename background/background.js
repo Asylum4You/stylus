@@ -1,7 +1,9 @@
-/* global dbExec, getStyles, saveStyle */
-/* global handleCssTransitionBug */
-/* global usercssHelper openEditor */
-/* global styleViaAPI */
+/*
+global dbExec getStyles saveStyle deleteStyle
+global handleCssTransitionBug detectSloppyRegexps
+global usercssHelper openEditor
+global styleViaAPI
+*/
 'use strict';
 
 // eslint-disable-next-line no-var
@@ -57,7 +59,11 @@ if (!chrome.browserAction ||
 
 // *************************************************************************
 // set the default icon displayed after a tab is created until webNavigation kicks in
-prefs.subscribe(['iconset'], () => updateIcon({id: undefined}, {}));
+prefs.subscribe(['iconset'], () =>
+  updateIcon({
+    tab: {id: undefined},
+    styles: {},
+  }));
 
 // *************************************************************************
 {
@@ -160,7 +166,10 @@ if (chrome.contextMenus) {
 window.addEventListener('storageReady', function _() {
   window.removeEventListener('storageReady', _);
 
-  updateIcon({id: undefined}, {});
+  updateIcon({
+    tab: {id: undefined},
+    styles: {},
+  });
 
   const NTP = 'chrome://newtab/';
   const ALL_URLS = '<all_urls>';
@@ -223,7 +232,7 @@ function webNavigationListener(method, {url, tabId, frameId}) {
     }
     // main page frame id is 0
     if (frameId === 0) {
-      updateIcon({id: tabId, url}, styles);
+      updateIcon({tab: {id: tabId, url}, styles});
     }
   });
 }
@@ -262,7 +271,7 @@ function webNavUsercssInstallerFF(data) {
 }
 
 
-function updateIcon(tab, styles) {
+function updateIcon({tab, styles}) {
   if (tab.id < 0) {
     return;
   }
@@ -340,6 +349,10 @@ function onRuntimeMessage(request, sender, sendResponseInternal) {
       saveStyle(request).then(sendResponse);
       return KEEP_CHANNEL_OPEN;
 
+    case 'deleteStyle':
+      deleteStyle(request).then(sendResponse);
+      return KEEP_CHANNEL_OPEN;
+
     case 'saveUsercss':
       usercssHelper.save(request, true).then(sendResponse);
       return KEEP_CHANNEL_OPEN;
@@ -378,6 +391,18 @@ function onRuntimeMessage(request, sender, sendResponseInternal) {
 
     case 'openEditor':
       openEditor(request.id);
+      return;
+
+    case 'detectSloppyRegexps':
+      sendResponse(detectSloppyRegexps(request));
+      return;
+
+    case 'updateIcon':
+      updateIcon(request);
+      return;
+
+    case 'setPref':
+      prefs.set(request.key, request.value, request);
       return;
   }
 }

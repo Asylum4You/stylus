@@ -5,6 +5,19 @@
 // keep message channel open for sendResponse in chrome.runtime.onMessage listener
 const KEEP_CHANNEL_OPEN = true;
 
+const API = new Proxy({}, {
+  get(target, name) {
+    return function invokeBG(args = {}) {
+      // eslint-disable-next-line no-use-before-define
+      if (BG && name in BG) return Promise.resolve(BG[name](BG.deepCopy(args)));
+      // eslint-disable-next-line no-use-before-define
+      if (!FIREFOX) return onBackgroundReady().then(() => invokeBG(args));
+      args.method = name;
+      return sendMessage(args);
+    };
+  },
+});
+
 const CHROME = Boolean(chrome.app) && parseInt(navigator.userAgent.match(/Chrom\w+\/(?:\d+\.){2}(\d+)|$/)[1]);
 const OPERA = CHROME && parseFloat(navigator.userAgent.match(/\bOPR\/(\d+\.\d+)|$/)[1]);
 const ANDROID = !chrome.windows;
@@ -71,7 +84,7 @@ if (!BG || BG !== window) {
   // TODO: remove once our manifest's minimum_chrome_version is 50+
   // Chrome 49 doesn't report own extension pages in webNavigation apparently
   if (CHROME && CHROME < 2661) {
-    getActiveTab().then(BG.updateIcon);
+    getActiveTab().then(tab => API.updateIcon({tab}));
   }
 }
 
@@ -110,7 +123,7 @@ function notifyAllTabs(msg) {
         sendMessage(msg, ignoreChromeError);
       }
       if (affectsIcon && BG) {
-        BG.updateIcon(tab);
+        API.updateIcon({tab});
       }
     };
     // list all tabs including chrome-extension:// which can be ours
@@ -294,10 +307,8 @@ function ignoreChromeError() {
 
 
 function getStyleWithNoCode(style) {
-  const stripped = Object.assign({}, style, {sections: []});
-  for (const section of style.sections) {
-    stripped.sections.push(Object.assign({}, section, {code: null}));
-  }
+  const stripped = deepCopy(style);
+  for (const section of stripped.sections) section.code = null;
   return stripped;
 }
 
@@ -404,34 +415,24 @@ function onBackgroundReady() {
 }
 
 
-// in case Chrome haven't yet loaded the bg page and displays our page like edit/manage
 function getStylesSafe(options) {
-  return onBackgroundReady()
-    .then(() => BG.getStyles(options));
+  return API.getStyles(options);
 }
 
 
 function saveStyleSafe(style) {
-  return onBackgroundReady()
-    .then(() => BG.saveStyle(BG.deepCopy(style)))
-    .then(savedStyle => {
-      if (style.notify === false) {
-        handleUpdate(savedStyle, style);
-      }
-      return savedStyle;
-    });
+  return API.saveStyle(style).then(savedStyle => {
+    if (style.notify === false) handleUpdate(savedStyle, style);
+    return savedStyle;
+  });
 }
 
 
-function deleteStyleSafe({id, notify = true} = {}) {
-  return onBackgroundReady()
-    .then(() => BG.deleteStyle({id, notify}))
-    .then(() => {
-      if (!notify) {
-        handleDelete(id);
-      }
-      return id;
-    });
+function deleteStyleSafe({id, notify = true}) {
+  return API.deleteStyle({id, notify}).then(() => {
+    if (!notify) handleDelete(id);
+    return id;
+  });
 }
 
 

@@ -131,7 +131,7 @@ var hotkeys = (() => {
           const message = {method: 'styleReplaceAll', tabId, frameId, styles};
           invokeOrPostpone(tab.active, sendMessage, message, ignoreChromeError);
           if (frameId === 0) {
-            setTimeout(BG.updateIcon, 0, tab, styles);
+            setTimeout(API.updateIcon, 0, {tab, styles});
           }
         }));
       ignoreChromeError();

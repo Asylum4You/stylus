@@ -150,7 +150,7 @@ var prefs = new function Prefs() {
       const hasChanged = !equal(value, oldValue);
       if (!fromBroadcast) {
         if (BG && BG !== window) {
-          BG.prefs.set(key, BG.deepCopy(value), {broadcast, sync});
+          API.setPref({key, value, broadcast, sync});
         } else {
           localStorage[key] = typeof defaults[key] === 'object'
             ? JSON.stringify(value)

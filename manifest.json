@@ -21,7 +21,7 @@
   "background": {
     "scripts": [
       "js/messaging.js",
-      "vendor/lz-string/lz-string-unsafe.js",
+      "js/storage-api.js",
       "js/color-parser.js",
       "js/usercss.js",
       "background/storage.js",
